@@ -24,7 +24,7 @@
 #else
 #define LOG_LASTERROR()                                                      \
   do {                                                                       \
-    XELOGI("Win32 Error 0x{:08X} in " __FUNCTION__ "(...)", GetLastError()); \
+    XELOGI("Win32 Error 0x{:08X} in {} (...)", GetLastError(), __FUNCTION__); \
   } while (false)
 #endif
 typedef HANDLE (*SetThreadDescriptionFn)(HANDLE hThread,
@@ -97,11 +97,13 @@ void raise_thread_name_exception(HANDLE thread, const std::string& name) {
   info.szName = name.c_str();
   info.dwThreadID = ::GetThreadId(thread);
   info.dwFlags = 0;
+#if XE_COMPILER_MSVC
   __try {
     RaiseException(0x406D1388, 0, sizeof(info) / sizeof(ULONG_PTR),
                    reinterpret_cast<ULONG_PTR*>(&info));
   } __except (EXCEPTION_EXECUTE_HANDLER) {  // NOLINT
   }
+#endif
 }
 
 static void set_name(HANDLE thread, const std::string_view name) {

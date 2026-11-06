@@ -143,22 +143,22 @@ struct DPCImpersonationScope {
 };
 
 struct KernelVersion {
+  struct Fields {
+    xe::be<uint16_t> major;
+    xe::be<uint16_t> minor;
+    xe::be<uint16_t> build;
+    xe::be<uint16_t> qfe;
+  };
   union {
     xe::be<uint64_t> value;
-
-    struct {
-      xe::be<uint16_t> major;
-      xe::be<uint16_t> minor;
-      xe::be<uint16_t> build;
-      xe::be<uint16_t> qfe;
-    };
+    Fields parts;
   };
 
   KernelVersion(uint16_t build_ver = kBaseKernelBuildVersion) {
-    major = 2;
-    minor = 0;
-    build = std::max(kBaseKernelBuildVersion, build_ver);
-    qfe = 0;
+    parts.major = 2;
+    parts.minor = 0;
+    parts.build = std::max(kBaseKernelBuildVersion, build_ver);
+    parts.qfe = 0;
   }
 };
 
@@ -301,6 +301,8 @@ class KernelState {
       std::function<X_RESULT(uint32_t&, uint32_t&)> completion_callback,
       uint32_t overlapped_ptr, std::function<void()> pre_callback = nullptr,
       std::function<void()> post_callback = nullptr);
+
+  bool QueueKernelDispatch(std::function<void()> callback);
 
   bool Save(ByteStream* stream);
   bool Restore(ByteStream* stream);

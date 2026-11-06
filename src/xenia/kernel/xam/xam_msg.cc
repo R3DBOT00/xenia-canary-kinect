@@ -16,6 +16,8 @@
 #include "xenia/kernel/xthread.h"
 #include "xenia/xbox.h"
 
+#include <atomic>
+
 namespace xe {
 namespace kernel {
 namespace xam {
@@ -50,10 +52,39 @@ struct XMSGSTARTIOREQUEST_UNKNOWNARG {
   be<uint32_t> unk_1;
 };
 
+bool IsNuiAuxiliaryQueueMessage(uint32_t app, uint32_t message) {
+  return app == 0xFE && message >= 0x0002A005 && message <= 0x0002A009;
+}
+
 X_HRESULT xeXMsgStartIORequestEx(uint32_t app, uint32_t message,
                                  uint32_t overlapped_ptr, uint32_t buffer_ptr,
                                  uint32_t buffer_length,
                                  XMSGSTARTIOREQUEST_UNKNOWNARG* unknown) {
+  if (IsNuiAuxiliaryQueueMessage(app, message)) {
+    static std::atomic<uint32_t> nui_auxiliary_trace_count{0};
+    const uint32_t trace_count = ++nui_auxiliary_trace_count;
+    if (trace_count <= 32 || (trace_count & 0x7F) == 0) {
+      XELOGI("XMsgStartIORequest: NUI auxiliary app={:08X} message={:08X} "
+             "overlapped={:08X} buffer={:08X} length={} unknown={}",
+             app, message, overlapped_ptr, buffer_ptr, buffer_length,
+             unknown ? "present" : "none");
+    }
+  }
+  if (overlapped_ptr) {
+    auto overlapped = kernel_state()->memory()->TranslateVirtual(overlapped_ptr);
+    XOverlappedSetResult(overlapped, X_ERROR_IO_PENDING);
+    XOverlappedSetContext(overlapped, XThread::GetCurrentThreadHandle());
+    const X_HANDLE event_handle = XOverlappedGetEvent(overlapped);
+    if (event_handle) {
+      auto event =
+          kernel_state()->object_table()->LookupObject<XEvent>(event_handle);
+      assert_not_null(event);
+      if (event) {
+        event->Reset();
+      }
+    }
+  }
+
   auto result = kernel_state()->app_manager()->DispatchMessageAsync(
       app, message, buffer_ptr, buffer_length);
   if (result == X_E_NOTFOUND) {
@@ -62,7 +93,9 @@ X_HRESULT xeXMsgStartIORequestEx(uint32_t app, uint32_t message,
     XThread::SetLastError(X_ERROR_NOT_FOUND);
   }
   if (overlapped_ptr) {
-    kernel_state()->CompleteOverlappedImmediate(overlapped_ptr, result);
+    const uint32_t length = !result ? 0 : 0xFFFFFFFF;
+    kernel_state()->CompleteOverlappedEx(overlapped_ptr, result, result,
+                                         length);
     result = X_ERROR_IO_PENDING;
   }
   if (result == X_ERROR_SUCCESS || result == X_ERROR_IO_PENDING) {

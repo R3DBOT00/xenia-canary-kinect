@@ -93,7 +93,10 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
                D3D12TextureCache& texture_cache, uint32_t& written_address_out,
                uint32_t& written_length_out,
                reg::RB_COPY_DEST_INFO* copy_dest_info_out = nullptr,
-               bool* written_scaled_out = nullptr);
+               bool* written_scaled_out = nullptr,
+               xenos::PrimitiveType primitive_type =
+                   xenos::PrimitiveType::kRectangleList,
+               uint32_t vertex_count = 3, bool indexed = false);
 
   // Returns true if any downloads were submitted to the command processor.
   bool InitializeTraceSubmitDownloads();

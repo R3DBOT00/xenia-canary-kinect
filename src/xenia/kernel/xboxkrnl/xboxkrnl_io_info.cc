@@ -7,6 +7,8 @@
  ******************************************************************************
  */
 
+#include <array>
+
 #include "xenia/base/logging.h"
 #include "xenia/kernel/info/file.h"
 #include "xenia/kernel/info/volume.h"
@@ -15,11 +17,27 @@
 #include "xenia/kernel/xboxkrnl/xboxkrnl_private.h"
 #include "xenia/kernel/xfile.h"
 #include "xenia/vfs/device.h"
+#include "xenia/vfs/devices/disc_image_entry.h"
 #include "xenia/xbox.h"
 
 namespace xe {
 namespace kernel {
 namespace xboxkrnl {
+
+namespace {
+
+constexpr std::array<uint8_t, 4> kXctdHeader = {0x0F, 0xF5, 0x12, 0xED};
+constexpr uint32_t kXctdCompressionPresent = 1;
+
+bool IsXctdCompressedFile(XFile* file) {
+  std::array<uint8_t, kXctdHeader.size()> header{};
+  size_t bytes_read = 0;
+  const X_STATUS status = file->file()->ReadSync(header, 0, &bytes_read);
+  return XSUCCEEDED(status) && bytes_read == header.size() &&
+         header == kXctdHeader;
+}
+
+}  // namespace
 
 uint32_t GetQueryFileInfoMinimumLength(uint32_t info_class) {
   switch (info_class) {
@@ -92,25 +110,42 @@ dword_result_t NtQueryInformationFile_entry(
       break;
     }
     case XFileSectorInformation: {
-      // SW that uses this seems to use the output as a way of uniquely
-      // identifying a file for sorting/lookup so we can just give it an
-      // arbitrary 4 byte integer most of the time
-      XELOGW("Stub XFileSectorInformation!");
       auto info = info_ptr.as<uint32_t*>();
-      size_t fname_hash = xe::memory::hash_combine(82589933LL, file->path());
-      *info = static_cast<uint32_t>(fname_hash ^ (fname_hash >> 32));
+      if (auto* disc_entry =
+              dynamic_cast<vfs::DiscImageEntry*>(file->entry())) {
+        const uint32_t bytes_per_sector = file->device()->bytes_per_sector();
+        if (!bytes_per_sector) {
+          status = X_STATUS_INVALID_DEVICE_REQUEST;
+          out_length = 0;
+          break;
+        }
+        // DiscImageEntry retains the XISO byte position of each file. This is
+        // the physical sector identity requested by retail disc titles.
+        *info = static_cast<uint32_t>(disc_entry->data_offset() /
+                                      bytes_per_sector);
+        XELOGD("NtQueryInformationFile sector: path='{}' sector={}",
+               file->path(), static_cast<uint32_t>(*info));
+      } else {
+        // Host-directory mounts have no XISO sector table. Retain their stable
+        // file identity without representing it as a physical disc position.
+        const size_t path_identity =
+            xe::memory::hash_combine(82589933LL, file->path());
+        *info = static_cast<uint32_t>(path_identity ^ (path_identity >> 32));
+        XELOGD("NtQueryInformationFile sector identity: path='{}' value={}",
+               file->path(), static_cast<uint32_t>(*info));
+      }
       out_length = sizeof(uint32_t);
       break;
     }
     case XFileXctdCompressionInformation: {
-      XELOGE(
-          "NtQueryInformationFile(XFileXctdCompressionInformation) "
-          "unimplemented");
-      // Files that are XCTD compressed begin with the magic 0x0FF512ED but we
-      // shouldn't detect this that way. There's probably a flag somewhere
-      // (attributes?) that defines if it's compressed or not.
-      status = X_STATUS_INVALID_PARAMETER;
-      out_length = 0;
+      // Extracted games retain the compression header but not the original
+      // media metadata. The Xbox ABI exposes this as a one-word boolean.
+      const bool is_xctd = IsXctdCompressedFile(file.get());
+      auto info = info_ptr.as<X_FILE_XCTD_COMPRESSION_INFORMATION*>();
+      info->unknown = is_xctd ? kXctdCompressionPresent : 0;
+      out_length = sizeof(*info);
+      XELOGD("NtQueryInformationFile XCTD: path='{}' compressed={}",
+             file->path(), is_xctd);
       break;
     };
     case XFileNetworkOpenInformation: {
@@ -384,10 +419,13 @@ dword_result_t NtQueryVolumeInformationFile_entry(
     case XFileFsDeviceInformation: {
       auto info = info_ptr.as<X_FILE_FS_DEVICE_INFORMATION*>();
       auto file_device = file->device();
-      XELOGW("Stub XFileFsDeviceInformation!");
       info->device_type =
-          FILE_DEVICE_UNKNOWN;  // 415608D8 checks for FILE_DEVICE_EHSTOR;
-      info->characteristics = 0;
+          static_cast<X_FILE_DEVICE_TYPE>(file_device->device_type());
+      info->characteristics = file_device->device_characteristics();
+      XELOGD("XFileFsDeviceInformation: device={} type={:08X} "
+             "characteristics={:08X}",
+             file_device->name(), file_device->device_type(),
+             file_device->device_characteristics());
       out_length = sizeof(X_FILE_FS_DEVICE_INFORMATION);
       break;
     }

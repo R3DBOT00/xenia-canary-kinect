@@ -25,20 +25,18 @@ namespace xe {
 
 class Win32MappedMemory : public MappedMemory {
  public:
-  // CreateFile returns INVALID_HANDLE_VALUE in case of failure.
-  // chrispy: made inline const to get around clang error
-  static inline constexpr HANDLE kFileHandleInvalid = INVALID_HANDLE_VALUE;
-  // CreateFileMapping returns nullptr in case of failure.
-  static constexpr HANDLE kMappingHandleInvalid = nullptr;
+  static bool IsInvalidFileHandle(HANDLE handle) {
+    return handle == nullptr || reinterpret_cast<intptr_t>(handle) == -1;
+  }
 
   ~Win32MappedMemory() override {
     if (data_) {
       UnmapViewOfFile(data_);
     }
-    if (mapping_handle != kMappingHandleInvalid) {
+    if (mapping_handle != nullptr) {
       CloseHandle(mapping_handle);
     }
-    if (file_handle != kFileHandleInvalid) {
+    if (!IsInvalidFileHandle(file_handle)) {
       CloseHandle(file_handle);
     }
   }
@@ -48,11 +46,11 @@ class Win32MappedMemory : public MappedMemory {
       UnmapViewOfFile(data_);
       data_ = nullptr;
     }
-    if (mapping_handle != kMappingHandleInvalid) {
+    if (mapping_handle != nullptr) {
       CloseHandle(mapping_handle);
-      mapping_handle = kMappingHandleInvalid;
+      mapping_handle = nullptr;
     }
-    if (file_handle != kFileHandleInvalid) {
+    if (!IsInvalidFileHandle(file_handle)) {
       if (truncate_size) {
         LONG distance_high = truncate_size >> 32;
         SetFilePointer(file_handle, truncate_size & 0xFFFFFFFF, &distance_high,
@@ -61,7 +59,7 @@ class Win32MappedMemory : public MappedMemory {
       }
 
       CloseHandle(file_handle);
-      file_handle = kFileHandleInvalid;
+      file_handle = nullptr;
     }
   }
 
@@ -94,8 +92,8 @@ class Win32MappedMemory : public MappedMemory {
     return true;
   }
 
-  HANDLE file_handle = kFileHandleInvalid;
-  HANDLE mapping_handle = kMappingHandleInvalid;
+  HANDLE file_handle = nullptr;
+  HANDLE mapping_handle = nullptr;
   DWORD view_access_ = 0;
 };
 
@@ -136,7 +134,7 @@ std::unique_ptr<MappedMemory> MappedMemory::Open(
 
   mm->file_handle = CreateFile(path.c_str(), file_access, file_share, nullptr,
                                create_mode, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (mm->file_handle == Win32MappedMemory::kFileHandleInvalid) {
+  if (Win32MappedMemory::IsInvalidFileHandle(mm->file_handle)) {
     return nullptr;
   }
 
@@ -149,7 +147,7 @@ std::unique_ptr<MappedMemory> MappedMemory::Open(
       CreateFileMappingFromApp(mm->file_handle, nullptr, ULONG(mapping_protect),
                                ULONG64(aligned_length), nullptr);
 #endif
-  if (mm->mapping_handle == Win32MappedMemory::kMappingHandleInvalid) {
+  if (mm->mapping_handle == nullptr) {
     return nullptr;
   }
 
@@ -226,8 +224,8 @@ class Win32ChunkedMappedMemoryWriter : public ChunkedMappedMemoryWriter {
   class Chunk {
    public:
     explicit Chunk(size_t capacity)
-        : file_handle_(Win32MappedMemory::kFileHandleInvalid),
-          mapping_handle_(Win32MappedMemory::kMappingHandleInvalid),
+        : file_handle_(nullptr),
+          mapping_handle_(nullptr),
           data_(nullptr),
           offset_(0),
           capacity_(capacity),
@@ -237,10 +235,10 @@ class Win32ChunkedMappedMemoryWriter : public ChunkedMappedMemoryWriter {
       if (data_) {
         UnmapViewOfFile(data_);
       }
-      if (mapping_handle_ != Win32MappedMemory::kMappingHandleInvalid) {
+      if (mapping_handle_ != nullptr) {
         CloseHandle(mapping_handle_);
       }
-      if (file_handle_ != Win32MappedMemory::kFileHandleInvalid) {
+      if (!Win32MappedMemory::IsInvalidFileHandle(file_handle_)) {
         CloseHandle(file_handle_);
       }
     }
@@ -254,7 +252,7 @@ class Win32ChunkedMappedMemoryWriter : public ChunkedMappedMemoryWriter {
 
       file_handle_ = CreateFile(path.c_str(), file_access, file_share, nullptr,
                                 create_mode, FILE_ATTRIBUTE_NORMAL, nullptr);
-      if (file_handle_ == Win32MappedMemory::kFileHandleInvalid) {
+      if (Win32MappedMemory::IsInvalidFileHandle(file_handle_)) {
         return false;
       }
 
@@ -267,7 +265,7 @@ class Win32ChunkedMappedMemoryWriter : public ChunkedMappedMemoryWriter {
                                                  ULONG(mapping_protect),
                                                  ULONG64(capacity_), nullptr);
 #endif
-      if (mapping_handle_ == Win32MappedMemory::kMappingHandleInvalid) {
+      if (mapping_handle_ == nullptr) {
         return false;
       }
 

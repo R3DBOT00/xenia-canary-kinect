@@ -13,6 +13,7 @@
 #include "xenia/base/assert.h"
 #include "xenia/base/byte_order.h"
 #include "xenia/base/cvar.h"
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/profiling.h"
@@ -23,13 +24,14 @@
 #include "xenia/gpu/gpu_flags.h"
 #include "xenia/gpu/packet_disassembler.h"
 #include "xenia/gpu/registers.h"
+#include "xenia/gpu/texture_address.h"
 #include "xenia/gpu/xenos.h"
 #include "xenia/gpu/xenos_zpd_report.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/ui/d3d12/d3d12_presenter.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
 
-DEFINE_bool(d3d12_bindless, true,
+DEFINE_bool(d3d12_bindless, false,
             "Use bindless resources where available - may improve performance, "
             "but may make debugging more complicated.",
             "D3D12");
@@ -2230,6 +2232,95 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                                       uint32_t frontbuffer_height) {
   SCOPE_profile_cpu_f("gpu");
 
+  const uint64_t swap_sequence = ++swap_diagnostic_sequence_;
+  if (swap_sequence <= 8 || swap_sequence % 60 == 0) {
+    XELOGI("D3D12 swap resolve association: sequence={} frontbuffer={:08X} "
+           "size={}x{} recent={}",
+           swap_sequence, frontbuffer_ptr, frontbuffer_width,
+           frontbuffer_height, recent_resolves_.size());
+    uint32_t compatible_count = 0;
+    for (auto it = recent_resolves_.rbegin(); it != recent_resolves_.rend();
+         ++it) {
+      const uint32_t pitch = it->destination_pitch & 0x3FFF;
+      const uint32_t height = (it->destination_pitch >> 16) & 0x3FFF;
+      if (pitch != frontbuffer_width || height != frontbuffer_height) {
+        continue;
+      }
+      const uint64_t written_end =
+          uint64_t(it->written_address) + it->written_length;
+      ++compatible_count;
+      if (frontbuffer_ptr >= it->written_address &&
+          uint64_t(frontbuffer_ptr) < written_end) {
+        XELOGI("D3D12 matching frontbuffer resolve: resolve_sequence={} "
+               "written={:08X}+{:X} destination={:08X} pitch={}x{} "
+               "info={:08X} control={:08X} age={}",
+               it->sequence, it->written_address, it->written_length,
+               it->destination_base, pitch, height, it->destination_info,
+               it->copy_control, resolve_sequence_ - it->sequence);
+        break;
+      }
+    }
+    XELOGI("D3D12 swap resolve summary: sequence={} compatible={}",
+           swap_sequence, compatible_count);
+
+    // Sample the CPU-visible resolve destination. With full readback this is
+    // the same completed guest frame that the texture cache should untile.
+    // Sampling every cache line keeps this diagnostic cheap enough for long
+    // automated runs while still distinguishing blank and changing frames.
+    const uint32_t frontbuffer_length =
+        frontbuffer_width && frontbuffer_height
+            ? frontbuffer_width * frontbuffer_height * 4
+            : 0;
+    const uint8_t* frontbuffer_memory =
+        frontbuffer_length
+            ? memory_->TranslatePhysical<const uint8_t*>(frontbuffer_ptr)
+            : nullptr;
+    if (frontbuffer_memory) {
+      uint64_t signature = UINT64_C(1469598103934665603);
+      uint32_t nonzero_samples = 0;
+      uint32_t sample_count = 0;
+      for (uint32_t offset = 0; offset < frontbuffer_length; offset += 64) {
+        const uint8_t value = frontbuffer_memory[offset];
+        nonzero_samples += value != 0;
+        signature = (signature ^ value) * UINT64_C(1099511628211);
+        ++sample_count;
+      }
+      XELOGI("D3D12 frontbuffer memory sample: sequence={} address={:08X} "
+             "length={:X} nonzero={}/{} signature={:016X}",
+             swap_sequence, frontbuffer_ptr, frontbuffer_length,
+             nonzero_samples, sample_count, signature);
+
+      static bool frontbuffer_dumped = false;
+      if (!frontbuffer_dumped && nonzero_samples > sample_count / 2 &&
+          frontbuffer_width <= 8192 && frontbuffer_height <= 8192) {
+        const std::filesystem::path dump_path =
+            fmt::format("frontbuffer_{:08X}_{}x{}_swap{}.ppm", frontbuffer_ptr,
+                        frontbuffer_width, frontbuffer_height, swap_sequence);
+        FILE* dump_file = filesystem::OpenFile(dump_path, "wb");
+        if (dump_file) {
+          std::fprintf(dump_file, "P6\n%u %u\n255\n", frontbuffer_width,
+                       frontbuffer_height);
+          const uint32_t tiled_pitch =
+              xe::align(frontbuffer_width,
+                        texture_address::kStoragePitchHeightAlignmentBlocks);
+          for (uint32_t y = 0; y < frontbuffer_height; ++y) {
+            for (uint32_t x = 0; x < frontbuffer_width; ++x) {
+              const int32_t offset =
+                  texture_address::Tiled2D(x, y, tiled_pitch, 2);
+              const uint8_t* bgra = frontbuffer_memory + offset;
+              const uint8_t rgb[3] = {bgra[2], bgra[1], bgra[0]};
+              std::fwrite(rgb, sizeof(rgb), 1, dump_file);
+            }
+          }
+          std::fclose(dump_file);
+          frontbuffer_dumped = true;
+          XELOGI("D3D12 CPU untiled frontbuffer dump written: {}",
+                 dump_path.string());
+        }
+      }
+    }
+  }
+
   ui::Presenter* presenter = graphics_system_->presenter();
   if (!presenter) {
     return;
@@ -2608,7 +2699,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   xenos::EdramMode edram_mode = regs.Get<reg::RB_MODECONTROL>().edram_mode;
   if (edram_mode == xenos::EdramMode::kCopy) {
     // Special copy handling.
-    return IssueCopy();
+    return IssueCopyForDraw(primitive_type, index_count,
+                            index_buffer_info != nullptr);
   }
 
   if (regs.Get<reg::RB_SURFACE_INFO>().surface_pitch == 0) {
@@ -3156,6 +3248,11 @@ void D3D12CommandProcessor::InitializeTrace() {
 }
 
 bool D3D12CommandProcessor::IssueCopy() {
+  return IssueCopyForDraw(xenos::PrimitiveType::kRectangleList, 3, false);
+}
+
+bool D3D12CommandProcessor::IssueCopyForDraw(
+    xenos::PrimitiveType primitive_type, uint32_t vertex_count, bool indexed) {
 #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
@@ -3167,23 +3264,40 @@ bool D3D12CommandProcessor::IssueCopy() {
     uint32_t written_address, written_length;
     return render_target_cache_->Resolve(*memory_, *shared_memory_,
                                          *texture_cache_, written_address,
-                                         written_length);
+                                         written_length, nullptr, nullptr,
+                                         primitive_type, vertex_count, indexed);
   } else {
-    return IssueCopy_ReadbackResolvePath();
+    return IssueCopy_ReadbackResolvePath(primitive_type, vertex_count, indexed);
   }
 }
 XE_NOINLINE
-bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath(
+    xenos::PrimitiveType primitive_type, uint32_t vertex_count, bool indexed) {
   uint32_t written_address, written_length;
   reg::RB_COPY_DEST_INFO copy_dest_info;
   bool is_scaled;
   if (!render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_,
                                      written_address, written_length,
-                                     &copy_dest_info, &is_scaled)) {
+                                     &copy_dest_info, &is_scaled, primitive_type,
+                                     vertex_count, indexed)) {
     return false;
   }
   if (!written_length) {
     return true;
+  }
+
+  const auto& resolve_regs = *register_file_;
+  recent_resolves_.push_back({
+      written_address,
+      written_length,
+      resolve_regs[XE_GPU_REG_RB_COPY_DEST_BASE],
+      resolve_regs[XE_GPU_REG_RB_COPY_DEST_PITCH],
+      copy_dest_info.value,
+      resolve_regs[XE_GPU_REG_RB_COPY_CONTROL],
+      ++resolve_sequence_,
+  });
+  while (recent_resolves_.size() > 32) {
+    recent_resolves_.pop_front();
   }
 
   // Skip all the GPU readback work if the destination memory isn't writable.

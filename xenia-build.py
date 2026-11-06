@@ -181,6 +181,8 @@ def import_vs_environment():
     if vswhere and len(vswhere) > 0:
         version = int(vswhere[0].get("catalog", {}).get("productLineVersion", VSVERSION_MINIMUM))
         install_path = vswhere[0].get("installationPath", None)
+    else:
+        return None
 
     vsdevcmd_path = os.path.join(install_path, "Common7", "Tools", "VsDevCmd.bat")
     if os.access(vsdevcmd_path, os.X_OK):

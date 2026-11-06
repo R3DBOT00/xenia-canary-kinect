@@ -10,7 +10,7 @@
 #ifndef XENIA_APU_XAUDIO2_XAUDIO2_API_H_
 #define XENIA_APU_XAUDIO2_XAUDIO2_API_H_
 
-#include <Audioclient.h>
+#include <audioclient.h>
 
 #include "xenia/base/platform_win.h"
 

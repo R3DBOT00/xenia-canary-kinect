@@ -9,6 +9,7 @@
 
 #include "xenia/kernel/xam/app_manager.h"
 
+#include "xenia/base/logging.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/xam/apps/messenger_app.h"
 #include "xenia/kernel/xam/apps/xam_app.h"
@@ -20,12 +21,35 @@ namespace xe {
 namespace kernel {
 namespace xam {
 
+namespace apps {
+
+class SystemMessageApp final : public App {
+ public:
+  explicit SystemMessageApp(KernelState* kernel_state, uint32_t app_id)
+      : App(kernel_state, app_id) {}
+
+  X_HRESULT DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
+                                uint32_t buffer_length) override {
+    XELOGD("SystemMessageApp({:08X}): msg={:08X}, buffer={:08X}, len={:08X}",
+           app_id(), message, buffer_ptr, buffer_length);
+    return X_E_SUCCESS;
+  }
+};
+
+}  // namespace apps
+
 App::App(KernelState* kernel_state, uint32_t app_id)
     : kernel_state_(kernel_state),
       memory_(kernel_state->memory()),
       app_id_(app_id) {}
 
 void AppManager::RegisterApps(KernelState* kernel_state, AppManager* manager) {
+  manager->RegisterApp(std::make_unique<apps::SystemMessageApp>(kernel_state,
+                                                                0xF1));
+  manager->RegisterApp(std::make_unique<apps::SystemMessageApp>(kernel_state,
+                                                                0xF2));
+  manager->RegisterApp(std::make_unique<apps::SystemMessageApp>(kernel_state,
+                                                                0xF3));
   manager->RegisterApp(std::make_unique<apps::MessengerApp>(kernel_state));
   manager->RegisterApp(std::make_unique<apps::XmpApp>(kernel_state));
   manager->RegisterApp(std::make_unique<apps::XgiApp>(kernel_state));

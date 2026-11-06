@@ -35,12 +35,17 @@ entry_inputs_end_code_begin_compute_xe
   }
   uint2_xe pixel_index = in_global_thread_id_xe.xy << uint2_xe(3u, 0u);
   float4_xe pixels_0123, pixels_4567;
-  XeResolveLoad8RedColors(
-      pass_byte_buffer_xe(xe_resolve_edram) pass_next_after_byte_buffer_xe
-      resolve_info,
-      XeResolveColorCopySourcePixelAddressBytesYHalfPixelOffsetFilling(
-          resolve_info, pixel_index),
-      pixels_0123, pixels_4567);
+  if (resolve_info.copy_command_constant_one) {
+    pixels_0123 = float_x4_xe(1.0f);
+    pixels_4567 = float_x4_xe(1.0f);
+  } else {
+    XeResolveLoad8RedColors(
+        pass_byte_buffer_xe(xe_resolve_edram) pass_next_after_byte_buffer_xe
+        resolve_info,
+        XeResolveColorCopySourcePixelAddressBytesYHalfPixelOffsetFilling(
+            resolve_info, pixel_index),
+        pixels_0123, pixels_4567);
+  }
   dont_flatten_xe
   if (pixel_index.x == 0u &&
       resolve_info.half_pixel_offset_fill_source.x != 0u) {

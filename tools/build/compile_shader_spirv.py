@@ -15,6 +15,9 @@ import os
 import struct
 import subprocess
 import sys
+import tempfile
+import shutil
+import shutil as shutil_mod
 
 
 SPIRV_STAGES = {
@@ -66,7 +69,8 @@ def main():
     output_path = sys.argv[2]
 
     src_name = os.path.basename(input_path)
-    src_dir = os.path.dirname(input_path)
+    src_dir = os.path.abspath(os.path.dirname(input_path))
+    project_root = os.path.abspath(os.path.join(src_dir, "../../../../"))
     src_is_xesl = src_name.endswith(".xesl")
 
     stage_key, spirv_stage = parse_stage(src_name)
@@ -79,6 +83,12 @@ def main():
 
     glslang, spirv_opt, spirv_dis = find_vulkan_tools()
 
+    have_tools = all(shutil_mod.which(tool) for tool in (glslang, spirv_opt, spirv_dis))
+    if not have_tools and os.path.exists(output_path):
+        # Allow native builds on machines without the Vulkan toolchain when the
+        # generated shader headers are already present in the source tree.
+        return 0
+
     # Create output directory if needed.
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -87,12 +97,51 @@ def main():
     glslang_spv = base + ".glslang.spv"
     opt_spv = base + ".spv"
     dis_txt = base + ".txt"
+    glslang_src = None
+    shader_work_root = None
+    shader_work_dir = None
 
     try:
         # Step 1: glslangValidator
+        if src_is_xesl:
+            shader_work_root = tempfile.mkdtemp(prefix="xenia-shader-")
+            shader_work_dir = os.path.join(
+                shader_work_root, "src", "xenia", "ui", "shaders")
+            os.makedirs(os.path.dirname(shader_work_dir), exist_ok=True)
+            shutil.copytree(
+                src_dir,
+                shader_work_dir,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("bytecode"),
+            )
+            os.symlink(os.path.join(project_root, "third_party"),
+                       os.path.join(shader_work_root, "third_party"),
+                       target_is_directory=True)
+            ffx_cas_dir = os.path.join(
+                project_root, "third_party", "FidelityFX-CAS", "ffx-cas")
+            ffx_cas_dir = ffx_cas_dir.replace("\\", "/")
+            for header_name in ("ffx_a.h", "ffx_cas.h"):
+                shutil.copy2(os.path.join(ffx_cas_dir, header_name),
+                             os.path.join(shader_work_dir, header_name))
+            for dirpath, _, filenames in os.walk(shader_work_dir):
+                for filename in filenames:
+                    if not filename.endswith((".xesl", ".xesli")):
+                        continue
+                    file_path = os.path.join(dirpath, filename)
+                    with open(file_path, "r", encoding="utf-8") as shader_file:
+                        shader_text = shader_file.read()
+            glslang_src = os.path.join(shader_work_root, "wrapper.glsl")
+            with open(glslang_src, "w") as wrapper_file:
+                wrapper_file.write(
+                    XESL_WRAPPER % os.path.join(
+                        "src", "xenia", "ui", "shaders", src_name))
+            glslang_input = glslang_src
+        else:
+            glslang_input = input_path
+
         glslang_args = [
             glslang,
-            "--stdin" if src_is_xesl else input_path,
+            glslang_input,
             "-DSHADING_LANGUAGE_GLSL_XE=1",
             "-S", spirv_stage,
             "-o", glslang_spv,
@@ -100,12 +149,20 @@ def main():
         ]
         if src_is_xesl:
             glslang_args.append(f"-I{src_dir}")
+            glslang_args.append(f"-I{project_root}")
+            glslang_args.append(f"-I{shader_work_dir}")
+            glslang_args.append(
+                f"-I{os.path.join(shader_work_root, 'third_party', 'FidelityFX-CAS', 'ffx-cas')}")
 
-        stdin_data = (XESL_WRAPPER % src_name) if src_is_xesl else None
-        result = subprocess.run(glslang_args, input=stdin_data, text=True,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        result = subprocess.run(
+            glslang_args,
+            text=True,
+            cwd=shader_work_dir if shader_work_dir else project_root,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode != 0:
             print(f"ERROR: glslangValidator failed for {src_name}", file=sys.stderr)
+            if result.stdout:
+                sys.stderr.write(result.stdout)
             if result.stderr:
                 sys.stderr.write(result.stderr)
             return 1
@@ -160,9 +217,11 @@ def main():
 
     finally:
         # Clean up intermediate files.
-        for f in (glslang_spv, opt_spv, dis_txt):
-            if os.path.exists(f):
+        for f in (glslang_src, glslang_spv, opt_spv, dis_txt):
+            if f and os.path.exists(f):
                 os.remove(f)
+        if shader_work_root and os.path.exists(shader_work_root):
+            shutil.rmtree(shader_work_root, ignore_errors=True)
 
     return 0
 

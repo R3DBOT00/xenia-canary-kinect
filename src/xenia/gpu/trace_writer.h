@@ -21,11 +21,10 @@
 // function calls (even if they just immediately return) is 0.40-0.60% cpu time
 // total. with inlining they just bloat the caller and negatively impact
 // register allocation for the caller
-#ifdef NDEBUG
-#define XE_ENABLE_TRACE_WRITER_INSTRUMENTATION 0
-#else
+// Xenect diagnostics need frame traces in the Release build used for physical
+// Kinect testing. The writer remains idle unless tracing is explicitly
+// requested, so normal execution only pays the existing instrumentation cost.
 #define XE_ENABLE_TRACE_WRITER_INSTRUMENTATION 1
-#endif
 
 namespace xe {
 namespace gpu {

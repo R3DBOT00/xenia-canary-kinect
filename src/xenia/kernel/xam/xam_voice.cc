@@ -49,6 +49,24 @@ dword_result_t XamVoiceGetMicArrayStatus_entry() {
 }
 DECLARE_XAM_EXPORT1(XamVoiceGetMicArrayStatus, kNone, kStub);
 
+dword_result_t XamVoiceSetMicArrayIdleUsers_entry() {
+  // Keep the guest moving until the Xenect-backed path is wired in.
+  return 0;
+}
+DECLARE_XAM_EXPORT1(XamVoiceSetMicArrayIdleUsers, kNone, kStub);
+
+dword_result_t XamVoiceMuteMicArray_entry() { return 0; }
+DECLARE_XAM_EXPORT1(XamVoiceMuteMicArray, kNone, kStub);
+
+dword_result_t XamVoiceGetMicArrayUnderrunStatus_entry() { return 0; }
+DECLARE_XAM_EXPORT1(XamVoiceGetMicArrayUnderrunStatus, kNone, kStub);
+
+dword_result_t XamVoiceGetMicArrayAudioEx_entry() { return 0; }
+DECLARE_XAM_EXPORT1(XamVoiceGetMicArrayAudioEx, kNone, kStub);
+
+dword_result_t XamVoiceDisableMicArray_entry() { return 0; }
+DECLARE_XAM_EXPORT1(XamVoiceDisableMicArray, kNone, kStub);
+
 }  // namespace xam
 }  // namespace kernel
 }  // namespace xe

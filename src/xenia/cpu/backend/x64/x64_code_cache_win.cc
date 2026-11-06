@@ -20,11 +20,13 @@
 #include "xenia/base/platform_win.h"
 #include "xenia/cpu/function.h"
 
-// Function pointer definitions
-using FnRtlAddGrowableFunctionTable = decltype(&RtlAddGrowableFunctionTable);
-using FnRtlGrowFunctionTable = decltype(&RtlGrowFunctionTable);
-using FnRtlDeleteGrowableFunctionTable =
-    decltype(&RtlDeleteGrowableFunctionTable);
+// Function pointer definitions. MinGW's Windows headers do not always expose
+// these growable-table APIs, so we declare the signatures explicitly.
+using FnRtlAddGrowableFunctionTable =
+    DWORD(WINAPI*)(PVOID*, PRUNTIME_FUNCTION, DWORD, DWORD, ULONG_PTR,
+                   ULONG_PTR);
+using FnRtlGrowFunctionTable = VOID(WINAPI*)(PVOID, DWORD);
+using FnRtlDeleteGrowableFunctionTable = VOID(WINAPI*)(PVOID);
 
 namespace xe {
 namespace cpu {

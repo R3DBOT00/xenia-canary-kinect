@@ -59,7 +59,7 @@ class IConfigVar : virtual public ICommandVar {
 template <class T>
 class CommandVar : virtual public ICommandVar {
  public:
-  CommandVar<T>(const char* name, T* default_value, const char* description);
+  CommandVar(const char* name, T* default_value, const char* description);
   const std::string& name() const override;
   const std::string& description() const override;
   void AddToLaunchOptions(cxxopts::Options* options) override;
@@ -83,8 +83,8 @@ class CommandVar : virtual public ICommandVar {
 template <class T>
 class ConfigVar : public CommandVar<T>, virtual public IConfigVar {
  public:
-  ConfigVar<T>(const char* name, T* default_value, const char* description,
-               const char* category, bool is_transient);
+  ConfigVar(const char* name, T* default_value, const char* description,
+            const char* category, bool is_transient);
   std::string config_value() const override;
   const T& GetTypedConfigValue() const;
   const std::string& category() const override;

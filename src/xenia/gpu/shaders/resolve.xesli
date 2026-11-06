@@ -89,6 +89,8 @@ struct XeResolveInfo {
     uint dest_slice_pitch_3d_macro_tiles;
     uint2_xe dest_xy_offset_scaled;
     uint sample_select;
+    bool copy_command_constant_one;
+    bool dest_is_compressed;
     uint dest_base;
   #endif  // XE_RESOLVE_CLEAR
 };
@@ -145,13 +147,19 @@ XeResolveInfo XeResolveGetInfo(param_push_consts_xe) {
     resolve_info.dest_slice_pitch_3d_macro_tiles =
         ((dest_coordinate_info >> 10u) & ((1u << 10u) - 1u)) <<
         (5 - XENOS_TEXTURE_MACRO_TILE_HEIGHT_3D_LOG2);
+    resolve_info.dest_is_compressed =
+        (coordinate_info & (1u << 22u)) != 0u;
+    uint dest_coordinate_unit_log2 =
+        resolve_info.dest_is_compressed ? 1u : 3u;
     resolve_info.dest_xy_offset_scaled =
         (((uint_x2_xe(dest_coordinate_info) >> uint2_xe(20u, 24u)) &
           ((1u << 4u) - 1u)) <<
-         3u) *
+         dest_coordinate_unit_log2) *
         resolve_info.resolution_scale;
     resolve_info.sample_select =
         (dest_coordinate_info >> 28u) & ((1u << 3u) - 1u);
+    resolve_info.copy_command_constant_one =
+        (dest_coordinate_info & (1u << 31u)) != 0u;
     #ifndef XE_RESOLVE_RESOLUTION_SCALED
       resolve_info.dest_base = push_const_xe(xe_resolve_dest_base);
     #else

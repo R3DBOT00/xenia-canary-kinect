@@ -24,7 +24,7 @@ if(WIN32)
     ${CMAKE_CURRENT_SOURCE_DIR}/main_resources.rc
     ${PROJECT_SOURCE_DIR}/src/xenia/base/app_win32.manifest
   )
-  if(XE_TARGET_X86_64)
+  if(MSVC AND XE_TARGET_X86_64)
     # main_init_win.cc needs SSE2 only (not AVX)
     set_source_files_properties(
       ${PROJECT_SOURCE_DIR}/src/xenia/base/main_init_win.cc
@@ -57,7 +57,6 @@ target_link_libraries(xenia-app PRIVATE
   xenia-core
   xenia-cpu
   xenia-gpu
-  xenia-gpu-null
   xenia-hid
   xenia-hid-nop
   xenia-kernel
@@ -78,10 +77,16 @@ target_link_libraries(xenia-app PRIVATE
   xxhash
 )
 
+target_sources(xenia-app PRIVATE
+  $<TARGET_OBJECTS:xenia-gpu-null>
+)
+
 # Vulkan/SPIR-V backends (not macOS)
 if(NOT APPLE)
   target_link_libraries(xenia-app PRIVATE
+    xenia-gpu-d3d12
     xenia-gpu-vulkan
+    xenia-ui-d3d12
     xenia-ui-vulkan
     glslang-spirv
   )
@@ -105,12 +110,14 @@ endif()
 
 # Platform-specific libraries
 if(WIN32)
+  if(MSVC)
+    target_link_libraries(xenia-app PRIVATE xenia-apu-xaudio2)
+  endif()
   target_link_libraries(xenia-app PRIVATE
-    xenia-apu-xaudio2
-    xenia-gpu-d3d12
     xenia-hid-winkey
     xenia-hid-xinput
-    xenia-ui-d3d12
+    ws2_32
+    shlwapi
   )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(xenia-app PRIVATE
@@ -120,6 +127,10 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     X11-xcb
     SDL2
   )
+endif()
+
+if(WIN32 AND NOT MSVC)
+  target_link_options(xenia-app PRIVATE -municode)
 endif()
 
 xe_target_defaults(xenia-app)

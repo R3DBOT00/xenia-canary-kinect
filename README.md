@@ -1,75 +1,49 @@
-<p align="center">
-    <a href="https://github.com/xenia-canary/xenia-canary/tree/canary_experimental/assets/icon">
-        <img height="256px" src="https://raw.githubusercontent.com/xenia-canary/xenia/master/assets/icon/256.png" />
-    </a>
-</p>
+# Xenia — 360io fork
 
-<h1 align="center">Xenia Canary - Xbox 360 Emulator</h1>
+An experimental fork of Xenia Canary developed alongside the 360io project.
+It explores Kinect integration, guest kernel compatibility, graphics behavior,
+and host build support for Xbox 360 emulation research.
 
-Xenia Canary is an experimental fork of the Xenia emulator. For more information, see the
-[Xenia Canary wiki](https://github.com/xenia-canary/xenia-canary/wiki).
+## Focus
 
-Come chat with us about **emulator-related topics** on [Discord](https://discord.gg/Q9mxZf9).
-For developer chat join `#dev` but stay on topic. Lurking is not only fine, but encouraged!
-Please check the [FAQ](https://github.com/xenia-canary/xenia-canary/wiki/FAQ) page before asking questions.
-We've got jobs/lives/etc, so don't expect instant answers.
-
-Discussing illegal activities will get you banned.
+- **Kinect and NUI:** expanded camera, depth, skeleton, input, and guest service handling, with an optional Kinect for Windows v1 SDK backend.
+- **Kernel compatibility:** work on module loading, LZX decompression, files, threads, synchronization, avatars, and application services.
+- **Graphics:** changes to render targets, texture handling, shader translation, memory exports, and GPU trace diagnostics.
+- **Host support:** CMake and Windows/MinGW compatibility changes, alongside the inherited Linux code paths.
 
 ## Status
 
-Buildbot | Status | Releases
--------- | ------ | --------
-Canary (🪟, 🐧) | [![CI](https://github.com/xenia-canary/xenia-canary/actions/workflows/Orchestrator.yml/badge.svg?branch=canary_experimental)](https://github.com/xenia-canary/xenia-canary/actions/workflows/Orchestrator.yml/badge.svg?branch=canary_experimental) [![Codacy Badge](https://app.codacy.com/project/badge/Grade/cd506034fd8148309a45034925648499)](https://app.codacy.com/gh/xenia-canary/xenia-canary/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade) | [Latest](https://github.com/xenia-canary/xenia-canary/releases/latest) ◦ [All](https://github.com/xenia-canary/xenia-canary/releases) ◦ [Old](https://github.com/xenia-canary/xenia-canary-releases/releases)
+This is a development source release, not a claim of complete Kinect support
+or universal game compatibility. The Windows Kinect backend requires separately
+installed hardware, drivers, and SDK components. These are not distributed here.
+See the validation report for the exact tests performed and remaining limits.
 
-### Experimental Netplay
+## Relationship to upstream
 
-Buildbot | Status | Releases
--------- | ------ | --------
-Windows | [![Codacy Badge](https://app.codacy.com/project/badge/Grade/d814c4b6aa444dcc9c1631e0224b2739)](https://app.codacy.com/gh/AdrianCassar/xenia-canary/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade) | [Latest](https://github.com/AdrianCassar/xenia-canary/releases/latest)
+Based on Xenia Canary commit `ed4540a641acd9f0a65132eac143322ee34c174b`.
+This is an independent fork, not an official Xenia or Xenia Canary release.
+Upstream authorship, source notices, and licenses are preserved. The public
+branch extends that verified upstream revision; private development history is
+not included.
 
-## Quickstart
+## Public source scope
 
-See the [Quickstart](https://github.com/xenia-canary/xenia-canary/wiki/Quickstart) page.
+Includes the emulator source, selected development tools, build files, licensed
+upstream icons, and dependency references pinned to commits. It does not include
+games, console firmware, a recompiled dashboard, Proto Stealth, personal keyvaults,
+credentials, captured traces, or the proprietary Kinect SDK.
 
-## FAQ
+## Documentation
 
-See the [frequently asked questions](https://github.com/xenia-canary/xenia-canary/wiki/FAQ) page.
+- [Development and testing](docs/DEVELOPMENT.md)
+- [Fork changes](docs/FORK_CHANGES.md)
+- [Licenses and third-party components](docs/THIRD_PARTY.md)
+- [Public source audit](docs/PUBLIC_RELEASE.md)
+- [Pinned dependencies](docs/SUBMODULES.json)
 
-## Game Compatibility
+## License
 
-See the [Game compatibility list](https://github.com/xenia-canary/game-compatibility/issues)
-for currently tracked games, and feel free to contribute your own updates,
-screenshots, and information there following the [existing conventions](https://github.com/xenia-canary/game-compatibility/blob/canary/README.md).
-
-## Building
-
-See [building.md](docs/building.md) for setup and information about the
-`xb` script. When writing code, check the [style guide](docs/style_guide.md)
-and be sure to run clang-format!
-
-## Contributors Wanted!
-
-Have some spare time, know advanced C++, and want to write an emulator?
-Contribute! There's a ton of work that needs to be done, a lot of which
-is wide open greenfield fun.
-
-**For general rules and guidelines please see [CONTRIBUTING.md](.github/CONTRIBUTING.md).**
-
-Fixes and optimizations are always welcome (please!), but in addition to
-that there are some major work areas still untouched:
-
-* Help work through [missing functionality/bugs in games](https://github.com/xenia-canary/xenia-canary/labels/compat)
-* Reduce the size of Xenia's [huge log files](https://github.com/xenia-canary/xenia-canary/issues/1526)
-* Skilled with Linux? A strong contributor is needed to [help with porting](https://github.com/xenia-canary/xenia-canary/labels/platform-linux)
-
-See more projects [good for contributors](https://github.com/xenia-canary/xenia-canary/labels/good%20first%20issue). It's a good idea to ask on Discord and check the issues page before beginning work on
-something.
-
-## Disclaimer
-
-The goal of this project is to experiment, research, and educate on the topic
-of emulation of modern devices and operating systems. **It is not for enabling
-illegal activity**. All information is obtained via reverse engineering of
-legally purchased devices and games and information made public on the internet
-(you'd be surprised what's indexed on Google...).
+Xenia code and this fork's changes retain the [BSD 3-Clause license](LICENSE).
+Third-party code retains its own terms. Upstream icons are covered separately
+by [CC BY-SA 4.0](assets/icon/LICENSE). No upstream affiliation or endorsement
+is implied.

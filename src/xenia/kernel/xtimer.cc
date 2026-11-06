@@ -36,6 +36,12 @@ void XTimer::Initialize(uint32_t timer_type) {
   assert_not_null(timer_);
 }
 
+void XTimer::InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header) {
+  assert_false(timer_);
+  const uint32_t timer_type = header->type == 9 ? 1 : 0;
+  Initialize(timer_type);
+}
+
 X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms,
                           uint32_t routine, uint32_t routine_arg, bool resume) {
   using xe::chrono::WinSystemClock;

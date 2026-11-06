@@ -1173,6 +1173,16 @@ void KernelState::CompleteOverlappedDeferredEx(
   dispatch_cond_.notify_all();
 }
 
+bool KernelState::QueueKernelDispatch(std::function<void()> callback) {
+  auto global_lock = global_critical_region_.Acquire();
+  if (!dispatch_thread_running_) {
+    return false;
+  }
+  dispatch_queue_.push_back(std::move(callback));
+  dispatch_cond_.notify_all();
+  return true;
+}
+
 bool KernelState::Save(ByteStream* stream) {
   XELOGD("Serializing the kernel...");
   stream->Write(kKernelSaveSignature);

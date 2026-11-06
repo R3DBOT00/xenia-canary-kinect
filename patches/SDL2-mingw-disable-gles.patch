@@ -1,0 +1,17 @@
+diff --git a/include/SDL_config_windows.h b/include/SDL_config_windows.h
+index 77d2d74fd..f2c5d07e8 100644
+--- a/include/SDL_config_windows.h
++++ b/include/SDL_config_windows.h
+@@ -319,6 +319,12 @@ typedef unsigned int uintptr_t;
+ #define SDL_VIDEO_OPENGL_EGL    1
+ #endif
+ 
++#if defined(__MINGW32__) || defined(__MINGW64__)
++#undef SDL_VIDEO_OPENGL_EGL
++#undef SDL_VIDEO_OPENGL_ES2
++#undef SDL_VIDEO_RENDER_OGL_ES2
++#endif
++
+ /* Enable Vulkan support */
+ #define SDL_VIDEO_VULKAN 1
+ 

@@ -2373,7 +2373,8 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type,
   xenos::EdramMode edram_mode = regs.Get<reg::RB_MODECONTROL>().edram_mode;
   if (edram_mode == xenos::EdramMode::kCopy) {
     // Special copy handling.
-    return IssueCopy();
+    return IssueCopyForDraw(prim_type, index_count,
+                            index_buffer_info != nullptr);
   }
 
   const ui::vulkan::VulkanDevice::Properties& device_properties =
@@ -2991,6 +2992,11 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type,
 }
 
 bool VulkanCommandProcessor::IssueCopy() {
+  return IssueCopyForDraw(xenos::PrimitiveType::kRectangleList, 3, false);
+}
+
+bool VulkanCommandProcessor::IssueCopyForDraw(
+    xenos::PrimitiveType primitive_type, uint32_t vertex_count, bool indexed) {
 #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
@@ -3004,7 +3010,8 @@ bool VulkanCommandProcessor::IssueCopy() {
   bool is_scaled;
   if (!render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_,
                                      written_address, written_length,
-                                     &copy_dest_info, &is_scaled)) {
+                                     &copy_dest_info, &is_scaled, primitive_type,
+                                     vertex_count, indexed)) {
     return false;
   }
 

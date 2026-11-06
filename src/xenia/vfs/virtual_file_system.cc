@@ -224,22 +224,29 @@ X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry,
   Entry* parent_entry = nullptr;
   Entry* entry = nullptr;
 
-  auto base_path = xe::utf8::find_base_guest_path(path);
-  if (!base_path.empty()) {
-    parent_entry = !root_entry ? ResolvePath(base_path)
-                               : root_entry->ResolvePath(base_path);
-    if (!parent_entry) {
-      *out_action = FileAction::kDoesNotExist;
-      return X_STATUS_OBJECT_PATH_NOT_FOUND;
-    }
+  // Resolve the complete path first. This preserves aliases whose target is a
+  // file rather than a directory, while the parent lookup below remains
+  // responsible for create operations on paths that don't exist yet.
+  entry = !root_entry ? ResolvePath(path) : root_entry->GetChild(path);
+  if (!entry) {
+    auto base_path = xe::utf8::find_base_guest_path(path);
+    if (!base_path.empty()) {
+      parent_entry = !root_entry ? ResolvePath(base_path)
+                                 : root_entry->ResolvePath(base_path);
+      if (!parent_entry) {
+        *out_action = FileAction::kDoesNotExist;
+        return X_STATUS_OBJECT_PATH_NOT_FOUND;
+      }
 
-    auto file_name = xe::utf8::find_name_from_guest_path(path);
-    entry = parent_entry->GetChild(file_name);
-  } else {
-    entry = !root_entry ? ResolvePath(path) : root_entry->GetChild(path);
+      auto file_name = xe::utf8::find_name_from_guest_path(path);
+      entry = parent_entry->GetChild(file_name);
+    }
   }
 
   if (entry) {
+    if (!(entry->attributes() & kFileAttributeDirectory) && is_directory) {
+      return X_STATUS_NOT_A_DIRECTORY;
+    }
     if (entry->attributes() & kFileAttributeDirectory && is_non_directory) {
       return X_STATUS_FILE_IS_A_DIRECTORY;
     }

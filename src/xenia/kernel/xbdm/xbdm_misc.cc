@@ -220,7 +220,7 @@ dword_result_t DmGetSystemInfo_entry(pointer_t<XBDM_SYSTEM_INFO> info) {
   info->base_kernel_version.qfe = info->kernel_version.qfe = 0;
 
   info->base_kernel_version.build = kBaseKernelBuildVersion;
-  info->kernel_version.build = kernel_state()->GetKernelVersion()->build;
+  info->kernel_version.build = kernel_state()->GetKernelVersion()->parts.build;
 
   return XBDM_SUCCESSFUL;
 }

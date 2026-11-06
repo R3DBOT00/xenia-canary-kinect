@@ -380,7 +380,12 @@ if(WIN32)
     libusb/libusb/os/windows_winusb.c
     libusb/libusb/os/windows_winusb.h
   )
-  target_include_directories(libusb PUBLIC libusb/libusb PRIVATE libusb/msvc)
+  target_include_directories(libusb PUBLIC libusb/libusb)
+  if(MSVC)
+    target_include_directories(libusb PRIVATE libusb/msvc)
+  else()
+    target_include_directories(libusb PRIVATE libusb/mingw)
+  endif()
 endif()
 
 # ==============================================================================

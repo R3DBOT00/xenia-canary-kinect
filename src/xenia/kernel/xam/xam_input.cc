@@ -140,6 +140,15 @@ dword_result_t XamInputGetState_entry(dword_t user_index, dword_t flags,
 }
 DECLARE_XAM_EXPORT2(XamInputGetState, kInput, kImplemented, kHighFrequency);
 
+dword_result_t XamInputRawState_entry(dword_t user_index, dword_t flags,
+                                      pointer_t<X_INPUT_STATE> input_state) {
+  if (input_state) {
+    memset((void*)input_state.host_address(), 0, sizeof(X_INPUT_STATE));
+  }
+  return XamInputGetState_entry(user_index, flags, input_state);
+}
+DECLARE_XAM_EXPORT2(XamInputRawState, kInput, kImplemented, kHighFrequency);
+
 // https://msdn.microsoft.com/en-us/library/windows/desktop/microsoft.directx_sdk.reference.xinputsetstate(v=vs.85).aspx
 dword_result_t XamInputSetState_entry(
     dword_t user_index,
@@ -230,19 +239,20 @@ dword_result_t XamInputGetKeystrokeEx_entry(
 DECLARE_XAM_EXPORT1(XamInputGetKeystrokeEx, kInput, kImplemented);
 
 X_HRESULT_result_t XamUserGetDeviceContext_entry(dword_t user_index,
-                                                 dword_t device_type,
-                                                 lpdword_t out_ptr) {
-  // Games check the result - usually with some masking.
-  // If this function fails they assume zero, so let's fail AND
-  // set zero just to be safe.
-  *out_ptr = 0;
-  if (kernel_state()->xam_state()->IsUserSignedIn(user_index) ||
-      (user_index & XUserIndexAny) == XUserIndexAny) {
-    *out_ptr = (uint32_t)user_index;
-    return X_E_SUCCESS;
-  } else {
-    return X_E_DEVICE_NOT_CONNECTED;
+                                                  dword_t device_type,
+                                                  lpdword_t out_ptr) {
+  if (!out_ptr) {
+    return X_E_INVALIDARG;
   }
+
+  // XAM exposes a zero device context for the local user. Titles use the
+  // return value as the availability check and mask this output separately.
+  *out_ptr = 0;
+  if (!user_index || (static_cast<uint32_t>(user_index) & 0xFF) ==
+                          XUserIndexAny) {
+    return X_E_SUCCESS;
+  }
+  return X_E_DEVICE_NOT_CONNECTED;
 }
 DECLARE_XAM_EXPORT1(XamUserGetDeviceContext, kInput, kStub);
 

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <vector>
 
 #include "xenia/base/byte_order.h"
 #include "xenia/base/logging.h"
@@ -92,6 +93,138 @@ mspack_system* mspack_memory_sys_create() {
 }
 
 void mspack_memory_sys_destroy(struct mspack_system* sys) { free(sys); }
+
+struct lzx_stream_input_file {
+  std::vector<uint8_t> data;
+  size_t offset = 0;
+};
+
+struct lzx_stream_output_file {
+  uint8_t* data = nullptr;
+  size_t size = 0;
+  size_t offset = 0;
+};
+
+struct lzx_stream {
+  mspack_system sys{};
+  lzx_stream_input_file input;
+  lzx_stream_output_file output;
+  lzxd_stream* decoder = nullptr;
+};
+
+int lzx_stream_read(mspack_file* file, void* buffer, int chars) {
+  auto input = reinterpret_cast<lzx_stream_input_file*>(file);
+  const size_t remaining = input->data.size() - input->offset;
+  const size_t total = std::min<size_t>(static_cast<size_t>(chars), remaining);
+  if (total) {
+    std::memcpy(buffer, input->data.data() + input->offset, total);
+    input->offset += total;
+  }
+  return static_cast<int>(total);
+}
+
+int lzx_stream_write(mspack_file* file, void* buffer, int chars) {
+  auto output = reinterpret_cast<lzx_stream_output_file*>(file);
+  const size_t remaining = output->size - output->offset;
+  const size_t total = std::min<size_t>(static_cast<size_t>(chars), remaining);
+  if (total) {
+    std::memcpy(output->data + output->offset, buffer, total);
+    output->offset += total;
+  }
+  return static_cast<int>(total);
+}
+
+lzx_stream* lzx_stream_create(uint32_t window_size) {
+  uint32_t window_bits;
+  if (!xe::bit_scan_forward(window_size, &window_bits) ||
+      window_size != (1u << window_bits)) {
+    return nullptr;
+  }
+
+  auto stream = new lzx_stream();
+  stream->sys.read = lzx_stream_read;
+  stream->sys.write = lzx_stream_write;
+  stream->sys.alloc = mspack_memory_alloc;
+  stream->sys.free = mspack_memory_free;
+  stream->sys.copy = mspack_memory_copy;
+  stream->decoder = lzxd_init(
+      &stream->sys, reinterpret_cast<mspack_file*>(&stream->input),
+      reinterpret_cast<mspack_file*>(&stream->output), window_bits, 0, 2, 0,
+      0);
+  if (!stream->decoder) {
+    delete stream;
+    return nullptr;
+  }
+  return stream;
+}
+
+int lzx_stream_decompress(lzx_stream* stream, const void* lzx_data,
+                          size_t lzx_len, void* dest, size_t dest_len) {
+  if (!stream || !stream->decoder || !lzx_data || !lzx_len || !dest ||
+      !dest_len || lzx_len >= INT_MAX || dest_len >= INT_MAX) {
+    return MSPACK_ERR_ARGS;
+  }
+
+  const auto input = static_cast<const uint8_t*>(lzx_data);
+  const size_t input_offset_before = stream->input.offset;
+  const unsigned int frame_before = stream->decoder->frame;
+  stream->input.data.insert(stream->input.data.end(), input, input + lzx_len);
+  // LDI supplies compressed input one frame at a time. Allow libmspack to
+  // probe the end of each supplied chunk without treating the next one as an
+  // attempt to read past a permanent EOF.
+  stream->decoder->input_end = 0;
+  stream->output.data = static_cast<uint8_t*>(dest);
+  stream->output.size = dest_len;
+  stream->output.offset = 0;
+  lzxd_set_output_length(stream->decoder,
+                         stream->decoder->offset + static_cast<off_t>(dest_len));
+  // libmspack's end-frame calculation includes the frame at the exact end
+  // offset. Stop one byte short and then drain that byte from its buffered
+  // output so a 32 KiB LDI call doesn't create a zero-length phantom frame.
+  const off_t final_offset =
+      stream->decoder->offset + static_cast<off_t>(dest_len);
+  const bool ends_on_frame_boundary =
+      (final_offset % LZX_FRAME_SIZE) == 0 && dest_len > 1;
+  const off_t first_output_size = static_cast<off_t>(
+      ends_on_frame_boundary ? dest_len - 1 : dest_len);
+  int result = lzxd_decompress(stream->decoder, first_output_size);
+  if (result == MSPACK_ERR_OK && ends_on_frame_boundary) {
+    result = lzxd_decompress(stream->decoder, 1);
+  }
+  XELOGI(
+      "LZX stream: input_added={} consumed={} pending={} output={} "
+      "frame={}->{} bits={} block_remaining={} result={}",
+      lzx_len, stream->input.offset - input_offset_before,
+      stream->input.data.size() - stream->input.offset, dest_len, frame_before,
+      stream->decoder->frame, stream->decoder->bits_left,
+      stream->decoder->block_remaining, result);
+  if (result == MSPACK_ERR_OK && stream->output.offset != dest_len) {
+    return MSPACK_ERR_WRITE;
+  }
+  if (result == MSPACK_ERR_OK) {
+    // XMem/LDI chunks are individually padded to a 16-bit boundary. Keep the
+    // LZX window, Huffman tables and repeated offsets, but don't carry the
+    // padding or prefetched word into the next chunk.
+    stream->decoder->bit_buffer = 0;
+    stream->decoder->bits_left = 0;
+    stream->decoder->i_ptr = stream->decoder->inbuf;
+    stream->decoder->i_end = stream->decoder->inbuf;
+    stream->decoder->input_end = 0;
+    stream->input.data.clear();
+    stream->input.offset = 0;
+  }
+  return result;
+}
+
+void lzx_stream_destroy(lzx_stream* stream) {
+  if (!stream) {
+    return;
+  }
+  if (stream->decoder) {
+    lzxd_free(stream->decoder);
+  }
+  delete stream;
+}
 
 int lzx_decompress(const void* lzx_data, size_t lzx_len, void* dest,
                    size_t dest_len, uint32_t window_size, void* window_data,

@@ -596,7 +596,41 @@ dword_result_t XamShowDeviceSelectorUI_entry(
 }
 DECLARE_XAM_EXPORT1(XamShowDeviceSelectorUI, kUI, kImplemented);
 
-void XamShowDirtyDiscErrorUI_entry(dword_t user_index) {
+void XamShowDirtyDiscErrorUI_entry(dword_t user_index,
+                                   const ppc_context_t& ctx) {
+  const uint32_t caller = uint32_t(ctx->lr);
+  const uint32_t stack = uint32_t(ctx->r[1]);
+  XELOGE("XamShowDirtyDiscErrorUI: caller={:08X} stack={:08X} user={} "
+         "r3={:08X} r4={:08X} r5={:08X} r6={:08X}",
+         caller, stack, uint32_t(user_index), uint32_t(ctx->r[3]),
+         uint32_t(ctx->r[4]), uint32_t(ctx->r[5]), uint32_t(ctx->r[6]));
+
+  if (caller >= 8) {
+    auto instructions = ctx.TranslateVirtual<const xe::be<uint32_t>*>(caller - 8);
+    if (instructions) {
+      XELOGE("DirtyDisc caller code [{:08X}]: {:08X} {:08X} {:08X} {:08X} "
+             "{:08X} {:08X}",
+             caller - 8, uint32_t(instructions[0]), uint32_t(instructions[1]),
+             uint32_t(instructions[2]), uint32_t(instructions[3]),
+             uint32_t(instructions[4]), uint32_t(instructions[5]));
+    }
+  }
+
+  uint32_t frame = stack;
+  for (uint32_t depth = 0; depth != 6 && frame; ++depth) {
+    auto frame_words = ctx.TranslateVirtual<const xe::be<uint32_t>*>(frame);
+    if (!frame_words) {
+      break;
+    }
+    const uint32_t previous_frame = frame_words[0];
+    const uint32_t return_address = frame_words[1];
+    XELOGE("DirtyDisc stack[{}]: frame={:08X} return={:08X}", depth, frame,
+           return_address);
+    if (previous_frame <= frame) {
+      break;
+    }
+    frame = previous_frame;
+  }
   if (cvars::headless) {
     assert_always();
     exit(1);

@@ -36,6 +36,7 @@ message(STATUS "Target architecture: XE_TARGET_AARCH64=${XE_TARGET_AARCH64} XE_T
 # Options
 option(XENIA_BUILD_TESTS "Build test suites" OFF)
 option(XENIA_BUILD_MISC "Build misc subprojects (trace viewers, shader compiler, vfs-dump, demos)" OFF)
+option(XENIA_ENABLE_LTO "Enable link-time optimization in Release builds" OFF)
 
 # Toggle profiler
 add_compile_definitions(XE_OPTION_PROFILING=0)
@@ -103,6 +104,17 @@ add_compile_definitions(
   USE_CPP17  # Tabulate
 )
 
+if(WIN32)
+  add_compile_definitions(
+    WIN32
+    _WIN64=1
+    _AMD64=1
+    UNICODE
+    _UNICODE
+    IMGUI_DISABLE_OBSOLETE_FUNCTIONS
+  )
+endif()
+
 # Prevent ASan error from ImGUI
 add_compile_definitions($<$<NOT:$<CONFIG:Checked>>:IMGUI_USE_STB_SPRINTF>)
 
@@ -119,6 +131,7 @@ if(MSVC)
     /utf-8       # Build correctly on systems with non-Latin codepages
     /wd4201      # Nameless struct/unions are ok
     /MP          # Multi-processor compilation
+    /FS          # Synchronize PDB writes between parallel compiler instances
   )
   if(XE_TARGET_X86_64)
     add_compile_options(/arch:AVX)
@@ -126,12 +139,6 @@ if(MSVC)
   add_compile_definitions(
     _CRT_NONSTDC_NO_DEPRECATE
     _CRT_SECURE_NO_WARNINGS
-    WIN32
-    _WIN64=1
-    _AMD64=1
-    UNICODE
-    _UNICODE
-    IMGUI_DISABLE_OBSOLETE_FUNCTIONS
   )
   add_link_options(
     /ignore:4006  # Ignores complaints about empty obj files
@@ -174,15 +181,16 @@ if(MSVC)
   # Replace /Ob2 with /Ob3 in CMake's default Release flags
   string(REPLACE "/Ob2" "/Ob3" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
   string(REPLACE "/Ob2" "/Ob3" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
-  # Link-time optimization (whole program optimization)
-  add_compile_options($<$<CONFIG:Release>:/GL>)
-  add_link_options($<$<CONFIG:Release>:/LTCG>)
-  set(CMAKE_STATIC_LINKER_FLAGS_RELEASE "${CMAKE_STATIC_LINKER_FLAGS_RELEASE} /LTCG")
+  if(XENIA_ENABLE_LTO)
+    add_compile_options($<$<CONFIG:Release>:/GL>)
+    add_link_options($<$<CONFIG:Release>:/LTCG>)
+    set(CMAKE_STATIC_LINKER_FLAGS_RELEASE "${CMAKE_STATIC_LINKER_FLAGS_RELEASE} /LTCG")
+  endif()
 
 else()
   # GCC/Clang (Linux)
   if(XE_TARGET_X86_64)
-    add_compile_options(-mavx)
+    add_compile_options(-mavx -mmovdir64b)
   endif()
 
   # Disable specific warnings for C++
@@ -289,23 +297,12 @@ else()
     $<$<CONFIG:Release>:NDEBUG>
     $<$<CONFIG:Release>:_NO_DEBUG_HEAP=1>
   )
-  add_compile_options($<$<CONFIG:Release>:-O3>)
-  # Link-time optimization (use lld and llvm-ar/ranlib to avoid system
-  # linker/archiver LTO plugin version mismatch with clang's bitcode)
-  add_compile_options($<$<CONFIG:Release>:-flto=thin>)
-  add_link_options($<$<CONFIG:Release>:-flto=thin>)
-  add_link_options($<$<CONFIG:Release>:-fuse-ld=lld>)
-  find_program(LLVM_AR NAMES llvm-ar)
-  find_program(LLVM_RANLIB NAMES llvm-ranlib)
-  if(LLVM_AR)
-    set(CMAKE_AR "${LLVM_AR}" CACHE FILEPATH "" FORCE)
-  endif()
-  if(LLVM_RANLIB)
-    set(CMAKE_RANLIB "${LLVM_RANLIB}" CACHE FILEPATH "" FORCE)
-  endif()
+  add_compile_options($<$<CONFIG:Release>:-O2>)
   # No symbols in release on non-Windows
   string(REPLACE "-g" "" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
   string(REPLACE "-g" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+  string(REPLACE "-O3" "-O2" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
+  string(REPLACE "-O3" "-O2" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
 endif()
 
 # ==============================================================================

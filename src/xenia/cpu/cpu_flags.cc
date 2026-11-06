@@ -9,6 +9,27 @@
 
 #include "xenia/cpu/cpu_flags.h"
 
+#include <atomic>
+
+namespace xe {
+namespace cpu {
+
+namespace {
+std::atomic<GuestFunctionEntryHook> guest_function_entry_hook{nullptr};
+}
+
+void SetGuestFunctionEntryHook(GuestFunctionEntryHook hook) {
+  guest_function_entry_hook.store(hook, std::memory_order_release);
+}
+
+bool InvokeGuestFunctionEntryHook(void* raw_context, uint32_t address) {
+  const auto hook = guest_function_entry_hook.load(std::memory_order_acquire);
+  return hook && hook(raw_context, address);
+}
+
+}  // namespace cpu
+}  // namespace xe
+
 DEFINE_string(cpu, "any", "Does nothing. CPU backend [any, x64].", "CPU");
 
 DEFINE_string(
@@ -29,6 +50,10 @@ DEFINE_bool(trace_function_references, false,
             "Generate tracing for function address references.", "CPU");
 DEFINE_bool(trace_function_data, false,
             "Generate tracing for function result data.", "CPU");
+DEFINE_string(trace_guest_functions, "",
+              "Comma-separated uppercase guest function addresses to log at "
+              "entry (for example 82A77080,82A75F10).",
+              "CPU");
 
 DEFINE_bool(validate_hir, false,
             "Perform validation checks on the HIR during compilation.", "CPU");

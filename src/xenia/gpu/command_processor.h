@@ -235,7 +235,6 @@ class CommandProcessor {
   virtual void WriteRegistersFromMem(uint32_t start_index, uint32_t* base,
                                      uint32_t num_registers);
 
-  XE_FORCEINLINE
   virtual void WriteRegisterRangeFromRing(xe::RingBuffer* ring, uint32_t base,
                                           uint32_t num_registers);
 

@@ -9,6 +9,8 @@
 
 #include "xenia/cpu/xex_module.h"
 
+#include <fstream>
+
 #include "third_party/fmt/include/fmt/format.h"
 
 #include "xenia/base/byte_order.h"
@@ -39,6 +41,9 @@ DEFINE_bool(disable_instruction_infocache, false,
 DEFINE_bool(writable_code_segments, false,
             "Enables a program to write to its own code segments in memory.",
             "CPU");
+
+DEFINE_path(dump_xex_images_path, "",
+            "Directory for decrypted, memory-mapped XEX image dumps.", "CPU");
 
 DEFINE_bool(
     enable_early_precompilation, false,
@@ -1114,6 +1119,30 @@ bool XexModule::LoadContinue() {
     }
 
     page += desc.page_count;
+  }
+
+  if (!cvars::dump_xex_images_path.empty()) {
+    std::error_code error;
+    std::filesystem::create_directories(cvars::dump_xex_images_path, error);
+    std::string dump_name = name_.empty() ? "unnamed" : name_;
+    for (char& character : dump_name) {
+      if (character == '\\' || character == '/' || character == ':') {
+        character = '_';
+      }
+    }
+    const auto dump_path =
+        cvars::dump_xex_images_path / (dump_name + ".image.bin");
+    std::ofstream dump(dump_path, std::ios::binary | std::ios::trunc);
+    if (dump) {
+      const uint32_t dump_size = image_size();
+      dump.write(reinterpret_cast<const char*>(
+                     memory()->TranslateVirtual(base_address_)),
+                 static_cast<std::streamsize>(dump_size));
+      XELOGI("Dumped XEX image {} base={:08X} size={} to {}", name_,
+             base_address_, dump_size, dump_path.string());
+    } else {
+      XELOGE("Unable to create XEX image dump {}", dump_path.string());
+    }
   }
 
   return true;

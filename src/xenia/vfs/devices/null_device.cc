@@ -13,6 +13,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/string.h"
+#include "xenia/base/utf8.h"
 #include "xenia/kernel/xfile.h"
 #include "xenia/vfs/devices/null_entry.h"
 
@@ -32,6 +33,10 @@ bool NullDevice::Initialize() {
 
   for (auto path : null_paths_) {
     auto child = NullEntry::Create(this, root_entry, path);
+    // Raw partitions and cache volumes are mounted directories. Marking them
+    // as regular files makes an otherwise valid open with a trailing separator
+    // fail with STATUS_NOT_A_DIRECTORY before the null volume can service it.
+    child->attributes_ = kFileAttributeDirectory;
     root_entry->children_.push_back(std::unique_ptr<Entry>(child));
   }
   return true;
@@ -46,12 +51,17 @@ Entry* NullDevice::ResolvePath(const std::string_view path) {
   XELOGFS("NullDevice::ResolvePath({})", path);
 
   auto root = root_entry_.get();
-  if (path.empty()) {
+  auto normalized_path = path;
+  while (normalized_path.size() > 1 &&
+         (normalized_path.back() == '\\' || normalized_path.back() == '/')) {
+    normalized_path.remove_suffix(1);
+  }
+  if (normalized_path.empty() || normalized_path == "\\") {
     return root_entry_.get();
   }
 
   for (auto& child : root->children()) {
-    if (!xe_strcasecmp(child->path().c_str(), path.data())) {
+    if (xe::utf8::equal_case(child->path(), normalized_path)) {
       return child.get();
     }
   }

@@ -886,6 +886,15 @@ bool EmulatorWindow::Initialize() {
   }
   main_menu->AddChild(std::move(xmp_menu));
 
+  // Kinect menu.
+  auto kinect_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Kinect");
+  {
+    kinect_menu->AddChild(MenuItem::Create(
+        MenuItem::Type::kString, "&Kinect settings", "",
+        std::bind(&EmulatorWindow::ToggleConsoleSettingsDialog, this)));
+  }
+  main_menu->AddChild(std::move(kinect_menu));
+
   // Console menu
   auto console_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Console");
   {

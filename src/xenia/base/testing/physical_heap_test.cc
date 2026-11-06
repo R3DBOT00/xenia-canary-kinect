@@ -193,19 +193,28 @@ TEST_CASE("PhysicalHeap vE0000000 AllocRange alignment", "[memory]") {
     REQUIRE(addr % 0x1000 == 0);
   }
 
-  SECTION("AllocRange with large alignment succeeds via bottom-up") {
-    // Bottom-up search picks a low parent address that translates to a
-    // guest address inside the child heap, so BaseHeap::AllocFixed accepts
-    // it. The PhysicalHeap alignment check is host-based
-    // ((addr + host_address_offset_) % alignment), so the misalignment of
-    // the guest address itself is not rejected here.
-    uint32_t alignment = 0x10000;
+  SECTION("AllocRange respects translated host alignment") {
+    // The guest-to-physical offset is 4KB. On a host with 4KB pages the
+    // host offset is zero, so a parent-aligned 64KB range must be rejected.
+    // Hosts with a compensating mapping offset may accept the same request.
+    const uint32_t alignment = 0x10000;
+    const uint32_t translation_offset =
+        heap.heap_base() - heap.GetPhysicalAddress(heap.heap_base());
+    const bool host_aligned =
+        (translation_offset + heap.host_address_offset()) % alignment == 0;
+    const auto parent_free_before = parent.unreserved_page_count();
     uint32_t addr = 0;
     bool ok = heap.AllocRange(0xE0000000, 0xFFFCFFFF, 0x10000, alignment,
                               kMemoryAllocationReserve, kMemoryProtectRead,
                               false, &addr);
-    REQUIRE(ok);
-    REQUIRE(addr >= 0xE0000000);
+    REQUIRE(ok == host_aligned);
+    if (host_aligned) {
+      REQUIRE(addr >= 0xE0000000);
+      REQUIRE((addr + heap.host_address_offset()) % alignment == 0);
+    } else {
+      REQUIRE(addr == 0);
+      REQUIRE(parent.unreserved_page_count() == parent_free_before);
+    }
   }
 }
 

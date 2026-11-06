@@ -34,6 +34,7 @@ class NullDevice : public Device {
   const std::string& name() const override { return name_; }
   uint32_t attributes() const override { return 0; }
   uint32_t component_name_max_length() const override { return 40; }
+  uint32_t device_type() const override { return 0x00000046; }
 
   uint32_t total_allocation_units() const override { return 0x10; }
   uint32_t available_allocation_units() const override { return 0x10; }

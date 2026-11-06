@@ -449,11 +449,12 @@ X_STATUS Emulator::MountPath(const std::filesystem::path& path,
 
   file_system_->UnregisterSymbolicLink(kDefaultPartitionSymbolicLink);
   file_system_->UnregisterSymbolicLink(kDefaultGameSymbolicLink);
+  file_system_->UnregisterSymbolicLink(kDefaultUpdateSymbolicLink);
   file_system_->UnregisterSymbolicLink("plugins:");
 
-  // Create symlinks to the device.
   file_system_->RegisterSymbolicLink(kDefaultGameSymbolicLink, mount_path);
   file_system_->RegisterSymbolicLink(kDefaultPartitionSymbolicLink, mount_path);
+  file_system_->RegisterSymbolicLink(kDefaultUpdateSymbolicLink, mount_path);
 
   return X_STATUS_SUCCESS;
 }
@@ -1291,9 +1292,8 @@ bool Emulator::ExceptionCallback(Exception* ex) {
                                current_thread->thread_id()));
   crash_msg.append(
       fmt::format("Thread Handle: 0x{:08X}\n", current_thread->handle()));
-  crash_msg.append(
-      fmt::format("PC: 0x{:08X}\n",
-                  guest_function->MapMachineCodeToGuestAddress(ex->pc())));
+  uint32_t guest_pc = guest_function->MapMachineCodeToGuestAddress(ex->pc());
+  crash_msg.append(fmt::format("PC: 0x{:08X}\n", guest_pc));
   if (ex->code() == Exception::Code::kAccessViolation) {
     const char* op_str = "unknown";
     if (ex->access_violation_operation() ==
@@ -1309,6 +1309,8 @@ bool Emulator::ExceptionCallback(Exception* ex) {
     crash_msg.append("Illegal Instruction\n");
   }
   crash_msg.append("Registers:\n");
+  crash_msg.append(fmt::format(" LR   = {:016X}\n", context->lr));
+  crash_msg.append(fmt::format(" CTR  = {:016X}\n", context->ctr));
   for (int i = 0; i < 32; i++) {
     crash_msg.append(fmt::format(" r{:<3} = {:016X}\n", i, context->r[i]));
   }
@@ -1323,6 +1325,15 @@ bool Emulator::ExceptionCallback(Exception* ex) {
         fmt::format(" v{:<3} = [0x{:08X}, 0x{:08X}, 0x{:08X}, 0x{:08X}]\n", i,
                     context->v[i].u32[0], context->v[i].u32[1],
                     context->v[i].u32[2], context->v[i].u32[3]));
+  }
+  crash_msg.append("Guest instructions around PC:\n");
+  for (int32_t offset = -32; offset <= 32; offset += 4) {
+    uint32_t address = guest_pc + offset;
+    const uint8_t* instruction_ptr = memory_->TranslateVirtual(address);
+    uint32_t instruction =
+        instruction_ptr ? xe::load_and_swap<uint32_t>(instruction_ptr) : 0;
+    crash_msg.append(fmt::format(" {} 0x{:08X}: {:08X}\n",
+                                 offset ? " " : ">", address, instruction));
   }
   XELOGE("{}", crash_msg);
   std::string crash_dlg = fmt::format(
@@ -1481,6 +1492,21 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
 
   // Allow xam to request module loads.
   auto xam = kernel_state()->GetKernelModule<kernel::xam::XamModule>("xam.xex");
+
+  // Retail titles may reopen the executable through this kernel device path
+  // during media and certificate initialization. Keep it bound to the module
+  // selected by the normal launcher, independently of the source container.
+  constexpr std::string_view kImageDevicePath = "\\Device\\Image";
+  file_system_->UnregisterSymbolicLink(kImageDevicePath);
+  auto* image_entry = file_system_->ResolvePath(module_path);
+  if (image_entry &&
+      !(image_entry->attributes() & vfs::kFileAttributeDirectory)) {
+    if (!file_system_->RegisterSymbolicLink(kImageDevicePath, module_path)) {
+      XELOGW("Unable to register title image device for {}", module_path);
+    }
+  } else {
+    XELOGW("Title image path is not a file: {}", module_path);
+  }
 
   XELOGI("Loading module {}", module_path);
   auto module = kernel_state_->LoadUserModule(module_path);

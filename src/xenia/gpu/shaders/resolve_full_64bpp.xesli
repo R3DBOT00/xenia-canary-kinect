@@ -26,21 +26,38 @@ entry_bindings_end_inputs_begin_compute_xe
   entry_in_global_thread_id_xe
 entry_inputs_end_code_begin_compute_xe
 {
-  // 1 thread = 4 host pixels.
+  // 1 thread = 4 host pixels, or 2 compressed 4x4 blocks.
   XeResolveInfo resolve_info = XeResolveGetInfo(pass_push_consts_xe);
-  uint2_xe pixel_index = in_global_thread_id_xe.xy << uint2_xe(2u, 0u);
+  uint pixel_index_x_log2 = resolve_info.dest_is_compressed ? 1u : 2u;
+  uint2_xe pixel_index =
+      in_global_thread_id_xe.xy << uint2_xe(pixel_index_x_log2, 0u);
+  uint resolve_width_log2 = resolve_info.dest_is_compressed ? 1u : 3u;
   // Group height can't cross resolve granularity, Y overflow check not needed.
   dont_flatten_xe
-  if (pixel_index.x >= resolve_info.width_div_8_scaled << 3u) {
+  if (pixel_index.x >=
+      resolve_info.width_div_8_scaled << resolve_width_log2) {
+    return;
+  }
+  if (resolve_info.dest_is_compressed) {
+    uint dest_address =
+        XeResolveDestPixelAddress(resolve_info, pixel_index, 3u);
+    byte_buffer_align16_store16_xe(
+        xe_resolve_dest, dest_address,
+        XeEndianSwap64(uint_x4_xe(0xFFFFFFFFu),
+                       resolve_info.dest_endian_128));
     return;
   }
   float4_xe pixel_0, pixel_1, pixel_2, pixel_3;
-  XeResolveLoad4RGBAColors(
-      pass_byte_buffer_xe(xe_resolve_edram) pass_next_after_byte_buffer_xe
-      resolve_info,
-      XeResolveColorCopySourcePixelAddressBytesYHalfPixelOffsetFilling(
-          resolve_info, pixel_index),
-      pixel_0, pixel_1, pixel_2, pixel_3);
+  if (resolve_info.copy_command_constant_one) {
+    pixel_0 = pixel_1 = pixel_2 = pixel_3 = float_x4_xe(1.0f);
+  } else {
+    XeResolveLoad4RGBAColors(
+        pass_byte_buffer_xe(xe_resolve_edram) pass_next_after_byte_buffer_xe
+        resolve_info,
+        XeResolveColorCopySourcePixelAddressBytesYHalfPixelOffsetFilling(
+            resolve_info, pixel_index),
+        pixel_0, pixel_1, pixel_2, pixel_3);
+  }
   uint4_xe packed_01, packed_23;
   XePack64bpp4Pixels(pixel_0, pixel_1, pixel_2, pixel_3,
                      resolve_info.dest_format,

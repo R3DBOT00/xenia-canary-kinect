@@ -320,7 +320,11 @@ class D3D12CommandProcessor final : public CommandProcessor {
 
   bool IssueCopy() override;
   XE_NOINLINE
-  bool IssueCopy_ReadbackResolvePath();
+  bool IssueCopyForDraw(xenos::PrimitiveType primitive_type,
+                        uint32_t vertex_count, bool indexed);
+  XE_NOINLINE
+  bool IssueCopy_ReadbackResolvePath(xenos::PrimitiveType primitive_type,
+                                     uint32_t vertex_count, bool indexed);
   void InitializeTrace() override;
 
  private:
@@ -888,6 +892,19 @@ class D3D12CommandProcessor final : public CommandProcessor {
 
   // Temporary storage for memexport stream constants used in the draw.
   std::vector<draw_util::MemExportRange> memexport_ranges_;
+
+  struct RecentResolveInfo {
+    uint32_t written_address;
+    uint32_t written_length;
+    uint32_t destination_base;
+    uint32_t destination_pitch;
+    uint32_t destination_info;
+    uint32_t copy_control;
+    uint64_t sequence;
+  };
+  std::deque<RecentResolveInfo> recent_resolves_;
+  uint64_t resolve_sequence_ = 0;
+  uint64_t swap_diagnostic_sequence_ = 0;
 };
 
 }  // namespace d3d12

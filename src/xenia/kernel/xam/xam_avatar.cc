@@ -8,19 +8,58 @@
  */
 
 #include "xenia/kernel/xam/xam_avatar.h"
+
+#include <atomic>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <vector>
+
 #include "xenia/base/logging.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xam/xam_private.h"
 
-DEFINE_bool(allow_avatar_initialization, false,
-            "Enable Avatar Initialization\n"
-            "Only set true when testing Avatar games. Certain games may crash "
-            "due to requirement of full avatar implementation.",
+DEFINE_bool(allow_avatar_initialization, true,
+            "Enable Xbox 360 avatar subsystem initialization",
             "Kernel");
+DEFINE_string(avatar_asset_dump_path, "",
+              "Directory where custom avatar STRB payloads are captured",
+              "Kernel");
 
 namespace xe {
 namespace kernel {
 namespace xam {
+
+namespace {
+
+// These are title-provided avatar resources, not files manufactured by Xenia.
+// XamAvatarGetAssets will consume this cache once its result-buffer hierarchy is
+// implemented; retaining the source payloads is necessary for that ABI work.
+std::mutex avatar_custom_assets_mutex;
+std::vector<std::vector<uint8_t>> avatar_custom_assets;
+
+bool IsAvatarStrbPayload(const uint8_t* data, size_t size) {
+  // STRB has a fixed 27-byte header, padded to the declared block alignment.
+  // Rejecting malformed input here prevents an arbitrary guest buffer from
+  // becoming a persistent avatar resource.
+  if (!data || size < 27 || std::memcmp(data, "STRB", 4) != 0) {
+    return false;
+  }
+
+  const uint8_t id_size = data[22];
+  const uint8_t span_size = data[23];
+  const uint8_t alignment = data[4] ? data[26] : 1;
+  return id_size != 0 && id_size <= 8 && span_size != 0 && span_size <= 4 &&
+         alignment != 0 && (alignment & (alignment - 1)) == 0;
+}
+
+void ClearAvatarCustomAssets() {
+  std::lock_guard<std::mutex> lock(avatar_custom_assets_mutex);
+  avatar_custom_assets.clear();
+}
+
+}  // namespace
 
 // Start/End
 dword_result_t XamAvatarInitialize_entry(
@@ -31,6 +70,7 @@ dword_result_t XamAvatarInitialize_entry(
     lpdword_t unk5,             // data segment ptr
     dword_t unk6                // flags - 0x00300000, 0x30, etc
 ) {
+  ClearAvatarCustomAssets();
   if (kernel_state()->title_id() == kAvatarEditorID) {
     return X_STATUS_SUCCESS;
   }
@@ -42,6 +82,7 @@ DECLARE_XAM_EXPORT1(XamAvatarInitialize, kAvatars, kStub);
 void XamAvatarShutdown_entry() {
   // Calls XMsgStartIORequestEx(0xf3,0x600002,0,0,0,0).
   // in 12611 its XamUnloadSysApp(0xf2,1)
+  ClearAvatarCustomAssets();
 }
 DECLARE_XAM_EXPORT1(XamAvatarShutdown, kAvatars, kStub);
 
@@ -89,9 +130,12 @@ dword_result_t XamAvatarGetManifestLocalUser_entry(
             user_profile->xuid(), kDashboardID, avatar_info_id,
             &avatar_info_setting_data, avatar_metadata_address);
 
-    // Profile doesn't have avatar info setting
-    if (!avatar_info_setting_data.data.data.binary.ptr) {
-      extended_error = X_E_FAIL;
+    // Avatar metadata is opaque. A zero-filled blob is not a valid fallback:
+    // callers are allowed to pass a successful result directly to the asset
+    // loader, which makes an invented manifest unsafe.
+    if (!has_avatar_info_setting ||
+        !avatar_info_setting_data.data.data.binary.ptr) {
+      extended_error = X_E_NO_SUCH_USER;
       return X_ERROR_FUNCTION_FAILED;
     }
 
@@ -128,10 +172,28 @@ DECLARE_XAM_EXPORT1(XamAvatarGetManifestsByXuid, kAvatars, kStub)
 dword_result_t XamAvatarGetAssetsResultSize_entry(
     dword_t avatar_component_mask, lpdword_t result_buffer_size_ptr,
     lpdword_t gpu_resource_buffer_size_ptr) {
-  *result_buffer_size_ptr = 0;
-  *gpu_resource_buffer_size_ptr = 0;
+  XELOGI(
+      "XamAvatarGetAssetsResultSize: mask={:08X} result_size_ptr={:08X} "
+      "gpu_size_ptr={:08X}",
+      static_cast<uint32_t>(avatar_component_mask),
+      result_buffer_size_ptr.guest_address(),
+      gpu_resource_buffer_size_ptr.guest_address());
+  if (result_buffer_size_ptr) {
+    *result_buffer_size_ptr = 0;
+  }
+  if (gpu_resource_buffer_size_ptr) {
+    *gpu_resource_buffer_size_ptr = 0;
+  }
 
-  return X_STATUS_SUCCESS;
+  // The result buffer is a hierarchy containing pointers into the GPU resource
+  // buffer. We do not have a serializer for that hierarchy yet, so a success
+  // status with zero-sized buffers is invalid: titles allocate a page and then
+  // dereference a result that was never produced. Return the documented failure
+  // path until real assets can be serialized from the installed package data.
+  XELOGW("XamAvatarGetAssetsResultSize: avatar asset hierarchy unavailable "
+         "for mask={:08X}",
+         static_cast<uint32_t>(avatar_component_mask));
+  return X_E_FAIL;
 }
 DECLARE_XAM_EXPORT1(XamAvatarGetAssetsResultSize, kAvatars, kStub);
 
@@ -140,15 +202,20 @@ dword_result_t XamAvatarGetAssets_entry(
     dword_t avatar_component_mask, dword_t flags, lpdword_t result_buffer_ptr,
     lpdword_t gpu_resource_buffer_ptr,
     pointer_t<XAM_OVERLAPPED> overlapped_ptr) {
-  // 58410907 doesn't crash if we return failure.
+  XELOGI(
+      "XamAvatarGetAssets: metadata={:08X} mask={:08X} flags={:08X} "
+      "result={:08X} gpu={:08X} overlapped={:08X}",
+      avatar_metadata_ptr.guest_address(),
+      static_cast<uint32_t>(avatar_component_mask), static_cast<uint32_t>(flags),
+      result_buffer_ptr.guest_address(),
+      gpu_resource_buffer_ptr.guest_address(), overlapped_ptr.guest_address());
   if (overlapped_ptr) {
     kernel_state()->CompleteOverlappedImmediateEx(
         overlapped_ptr, X_ERROR_FUNCTION_FAILED, X_E_FAIL, 0);
-
     return X_ERROR_IO_PENDING;
   }
 
-  return X_STATUS_SUCCESS;
+  return X_E_FAIL;
 }
 DECLARE_XAM_EXPORT1(XamAvatarGetAssets, kAvatars, kStub);
 
@@ -156,6 +223,47 @@ dword_result_t XamAvatarSetCustomAsset_entry(
     dword_t buffer_size, lpdword_t asset_data_ptr, dword_t custom_color_count,
     lpdword_t custom_colors_ptr,
     pointer_t<X_AVATAR_METADATA> avatar_metadata_ptr) {
+  if (!asset_data_ptr || !buffer_size) {
+    return X_E_INVALIDARG;
+  }
+
+  const auto* asset_data = kernel_state()->memory()->TranslateVirtual(
+      asset_data_ptr.guest_address());
+  if (!IsAvatarStrbPayload(asset_data, static_cast<uint32_t>(buffer_size))) {
+    XELOGW("XamAvatarSetCustomAsset: rejected malformed STRB payload size={}",
+           static_cast<uint32_t>(buffer_size));
+    return X_E_INVALIDARG;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(avatar_custom_assets_mutex);
+    avatar_custom_assets.emplace_back(asset_data,
+                                      asset_data + static_cast<uint32_t>(buffer_size));
+  }
+
+  if (!cvars::avatar_asset_dump_path.empty()) {
+    static std::atomic<uint32_t> dump_sequence = 0;
+    std::error_code error;
+    const std::filesystem::path dump_directory =
+        cvars::avatar_asset_dump_path;
+    std::filesystem::create_directories(dump_directory, error);
+
+    const uint32_t sequence = dump_sequence.fetch_add(1);
+    const auto dump_path = dump_directory /
+                           fmt::format("{:08X}-{:04}-{:08X}.strb",
+                                       kernel_state()->title_id(), sequence,
+                                       static_cast<uint32_t>(buffer_size));
+    std::ofstream dump(dump_path, std::ios::binary | std::ios::trunc);
+    if (dump) {
+      dump.write(reinterpret_cast<const char*>(asset_data),
+                 static_cast<std::streamsize>(buffer_size));
+      XELOGI("XamAvatarSetCustomAsset: captured {} bytes to {}",
+             static_cast<uint32_t>(buffer_size), dump_path.string());
+    } else {
+      XELOGE("XamAvatarSetCustomAsset: failed to create {}",
+             dump_path.string());
+    }
+  }
   return X_STATUS_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamAvatarSetCustomAsset, kAvatars, kStub)
@@ -210,24 +318,36 @@ dword_result_t XamAvatarGetMetadataRandom_entry(
     dword_t body_type, dword_t avatars_count,
     pointer_t<X_AVATAR_METADATA> avatar_metadata_ptr,
     pointer_t<XAM_OVERLAPPED> overlapped_ptr) {
-  if (overlapped_ptr) {
-    kernel_state()->CompleteOverlappedImmediate(overlapped_ptr,
-                                                X_ERROR_SUCCESS);
-    return X_ERROR_IO_PENDING;
+  if (!avatars_count) {
+    return X_STATUS_SUCCESS;
+  }
+  if (!avatar_metadata_ptr) {
+    return X_E_INVALIDARG;
   }
 
-  return X_STATUS_SUCCESS;
+  // Generating the opaque retail metadata format has not been implemented.
+  // Do not claim success while leaving an array of invalid manifests behind.
+  if (overlapped_ptr) {
+    kernel_state()->CompleteOverlappedImmediate(overlapped_ptr,
+                                                X_E_FAIL);
+    return X_ERROR_IO_PENDING;
+  }
+  return X_E_FAIL;
 }
 DECLARE_XAM_EXPORT1(XamAvatarGetMetadataRandom, kAvatars, kStub);
 
 dword_result_t XamAvatarGetMetadataSignedOutProfileCount_entry(
     lpdword_t profile_count_ptr, pointer_t<XAM_OVERLAPPED> overlapped_ptr) {
+  if (!profile_count_ptr) {
+    return X_E_INVALIDARG;
+  }
+  // Xenia currently has no persisted signed-out local-profile roster.
+  *profile_count_ptr = 0;
   if (overlapped_ptr) {
     kernel_state()->CompleteOverlappedImmediate(overlapped_ptr,
                                                 X_ERROR_SUCCESS);
     return X_ERROR_IO_PENDING;
   }
-
   return X_STATUS_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamAvatarGetMetadataSignedOutProfileCount, kAvatars, kStub);
@@ -235,13 +355,17 @@ DECLARE_XAM_EXPORT1(XamAvatarGetMetadataSignedOutProfileCount, kAvatars, kStub);
 dword_result_t XamAvatarGetMetadataSignedOutProfile_entry(
     dword_t profile_index, pointer_t<X_AVATAR_METADATA> avatar_metadata_ptr,
     pointer_t<XAM_OVERLAPPED> overlapped_ptr) {
+  if (!avatar_metadata_ptr) {
+    return X_E_INVALIDARG;
+  }
+  // The count export reports zero, so every index is out of range. Returning
+  // success here previously exposed untouched guest memory as avatar metadata.
   if (overlapped_ptr) {
     kernel_state()->CompleteOverlappedImmediate(overlapped_ptr,
-                                                X_ERROR_SUCCESS);
+                                                X_E_NO_SUCH_USER);
     return X_ERROR_IO_PENDING;
   }
-
-  return X_STATUS_SUCCESS;
+  return X_E_NO_SUCH_USER;
 }
 DECLARE_XAM_EXPORT1(XamAvatarGetMetadataSignedOutProfile, kAvatars, kStub);
 

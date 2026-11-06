@@ -192,7 +192,6 @@ class XFile : public XObject {
 
   vfs::File* file_ = nullptr;
   std::unique_ptr<threading::Event> async_event_ = nullptr;
-
   mutable std::mutex file_lock_;
   std::mutex completion_port_lock_;
   std::vector<std::pair<uint32_t, object_ref<XIOCompletion>>> completion_ports_;

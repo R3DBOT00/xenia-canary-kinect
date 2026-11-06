@@ -19,7 +19,7 @@
 
 #include "version.h"
 
-#include <Psapi.h>
+#include <psapi.h>
 
 DEFINE_bool(enable_console, false, "Open a console window with the main window",
             "Logging");
@@ -36,19 +36,23 @@ static HMODULE probe_for_module(void* addr) {
       65536;  // search down at most 64 mb (we do it in
               // batches of 64k so its pretty quick). i think its reasonable to
               // expect no module will be > 64mb
-  // break if access violation thrown, we're definitely not a PE in that case
-  __try {
-    for (unsigned i = 0; i < max_search_iters; ++i) {
-      if (*reinterpret_cast<unsigned short*>(base) == 'ZM') {
-        return reinterpret_cast<HMODULE>(base);
-      } else {
-        base -= 65536;
-      }
+  for (unsigned i = 0; i < max_search_iters; ++i) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery(reinterpret_cast<LPCVOID>(base), &mbi, sizeof(mbi))) {
+      return nullptr;
     }
-    return nullptr;
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-    return nullptr;
+    if (mbi.State != MEM_COMMIT ||
+        (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+      base -= 65536;
+      continue;
+    }
+    if (*reinterpret_cast<unsigned short*>(base) == 'ZM') {
+      return reinterpret_cast<HMODULE>(base);
+    } else {
+      base -= 65536;
+    }
   }
+  return nullptr;
 }
 
 static constexpr auto XENIA_ERROR_LANGUAGE =
@@ -294,12 +298,8 @@ static ExceptionInfoCategoryHandler host_exception_category_handlers[] = {
 LONG _UnhandledExceptionFilter(_EXCEPTION_POINTERS* ExceptionInfo) {
   HostExceptionReport report{ExceptionInfo};
   for (auto&& handler : host_exception_category_handlers) {
-    __try {
-      if (!handler(&report)) {
-        continue;
-      }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-      report.AddString("<Nested Exception Encountered>\n");
+    if (!handler(&report)) {
+      continue;
     }
   }
   report.DisplayExceptionMessage();

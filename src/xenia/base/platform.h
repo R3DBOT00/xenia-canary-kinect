@@ -44,15 +44,15 @@
 #if defined(__clang__) && !defined(_MSC_VER)  // chrispy: support clang-cl
 #define XE_COMPILER_CLANG 1
 #define XE_COMPILER_HAS_CLANG_EXTENSIONS 1
+#elif defined(__MINGW32__) || defined(__MINGW64__)
+#define XE_COMPILER_MINGW32 1
+#define XE_COMPILER_HAS_GNU_EXTENSIONS 1
 #elif defined(__GNUC__)
 #define XE_COMPILER_GNUC 1
 #define XE_COMPILER_HAS_GNU_EXTENSIONS 1
 #elif defined(_MSC_VER)
 #define XE_COMPILER_MSVC 1
 #define XE_COMPILER_HAS_MSVC_EXTENSIONS 1
-#elif defined(__MINGW32)
-#define XE_COMPILER_MINGW32 1
-#define XE_COMPILER_HAS_GNU_EXTENSIONS 1
 #elif defined(__INTEL_COMPILER)
 #define XE_COMPILER_INTEL 1
 #else

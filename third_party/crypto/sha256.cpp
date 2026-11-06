@@ -7,13 +7,13 @@
 
 #include "sha256.h"
 
-// big endian architectures need #define __BYTE_ORDER __BIG_ENDIAN
-#ifndef _MSC_VER
-#ifdef __APPLE__
-#include <machine/endian.h>
-#else
-#include <endian.h>
-#endif
+// big endian architectures need __BYTE_ORDER-style macros.
+#if !defined(_MSC_VER)
+#  if defined(__APPLE__)
+#    include <machine/endian.h>
+#  elif !defined(_WIN32)
+#    include <endian.h>
+#  endif
 #endif
 
 namespace sha256 {
@@ -86,8 +86,10 @@ void SHA256::processBlock(const void* data) {
   uint32_t words[64];
   int i;
   for (i = 0; i < 16; i++)
-#if defined(__BYTE_ORDER) && (__BYTE_ORDER != 0) && \
-    (__BYTE_ORDER == __BIG_ENDIAN)
+#if (defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && \
+     (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)) || \
+    (defined(__BYTE_ORDER) && defined(__BIG_ENDIAN) && \
+     (__BYTE_ORDER == __BIG_ENDIAN))
     words[i] = input[i];
 #else
     words[i] = swap(input[i]);

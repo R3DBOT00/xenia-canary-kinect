@@ -476,21 +476,28 @@ void SharedMemory::TryFindUploadRange(const uint32_t& block_first,
 }
 
 static bool UploadRange_DoBestScanForward(uint64_t v, uint32_t* out) {
-#if XE_ARCH_AMD64 == 1 && XE_PLATFORM_WIN32
   if (!v) {
     return false;
   }
-  if (amd64::GetFeatureFlags() & amd64::kX64EmitBMI1) {
-    *out = static_cast<uint32_t>(_tzcnt_u64(v));
-  } else {
-    unsigned char bsfres = _BitScanForward64((unsigned long*)out, v);
-
-    XE_MSVC_ASSUME(bsfres == 1);
+  uint32_t bit_index = 0;
+  while ((v & 1) == 0) {
+    v >>= 1;
+    ++bit_index;
   }
+  *out = bit_index;
   return true;
-#else
-  return xe::bit_scan_forward(v, out);
-#endif
+}
+
+static uint32_t UploadRange_CountTrailingZeros64(uint64_t v) {
+  if (!v) {
+    return 64;
+  }
+  uint32_t bit_index = 0;
+  while ((v & 1) == 0) {
+    v >>= 1;
+    ++bit_index;
+  }
+  return bit_index;
 }
 
 void SharedMemory::TryGetNextUploadRange(
@@ -575,7 +582,9 @@ std::pair<uint32_t, uint32_t> SharedMemory::MemoryInvalidationCallback(
           system_page_flags_valid_and_gpu_written_[block_last];
       gpu_written_end &= ~((uint64_t(1) << ((page_last & 63) + 1)) - 1);
       page_last = (page_last & ~uint32_t(63)) +
-                  (std::max(xe::tzcnt(gpu_written_end), uint8_t(1)) - 1);
+                  (std::max(UploadRange_CountTrailingZeros64(gpu_written_end),
+                            uint32_t(1)) -
+                   1);
     }
   }
 

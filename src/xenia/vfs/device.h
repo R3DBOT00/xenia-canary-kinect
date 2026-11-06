@@ -10,6 +10,7 @@
 #ifndef XENIA_VFS_DEVICE_H_
 #define XENIA_VFS_DEVICE_H_
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -36,6 +37,12 @@ class Device {
   virtual const std::string& name() const = 0;
   virtual uint32_t attributes() const = 0;
   virtual uint32_t component_name_max_length() const = 0;
+
+  // Values returned by NtQueryVolumeInformationFile's device-information
+  // class. Keep them owned by the VFS device rather than guessing from an
+  // opened file path in the kernel.
+  virtual uint32_t device_type() const { return 0x00000022; }
+  virtual uint32_t device_characteristics() const { return 0; }
 
   virtual uint32_t total_allocation_units() const = 0;
   virtual uint32_t available_allocation_units() const = 0;

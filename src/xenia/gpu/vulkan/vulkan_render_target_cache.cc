@@ -1070,7 +1070,8 @@ bool VulkanRenderTargetCache::Resolve(
     const Memory& memory, VulkanSharedMemory& shared_memory,
     VulkanTextureCache& texture_cache, uint32_t& written_address_out,
     uint32_t& written_length_out, reg::RB_COPY_DEST_INFO* copy_dest_info_out,
-    bool* written_scaled_out) {
+    bool* written_scaled_out, xenos::PrimitiveType primitive_type,
+    uint32_t vertex_count, bool indexed) {
   written_address_out = 0;
   written_length_out = 0;
   if (written_scaled_out) {
@@ -1083,7 +1084,8 @@ bool VulkanRenderTargetCache::Resolve(
   if (!draw_util::GetResolveInfo(
           register_file(), memory, trace_writer_, draw_resolution_scale_x(),
           draw_resolution_scale_y(), IsFixedRG16TruncatedToMinus1To1(),
-          IsFixedRGBA16TruncatedToMinus1To1(), resolve_info)) {
+          IsFixedRGBA16TruncatedToMinus1To1(), resolve_info, primitive_type,
+          vertex_count, indexed)) {
     return false;
   }
 
@@ -1128,7 +1130,8 @@ bool VulkanRenderTargetCache::Resolve(
         if (!draw_util::GetResolveInfo(register_file(), memory, trace_writer_,
                                        1, 1, IsFixedRG16TruncatedToMinus1To1(),
                                        IsFixedRGBA16TruncatedToMinus1To1(),
-                                       resolve_info)) {
+                                       resolve_info, primitive_type,
+                                       vertex_count, indexed)) {
           return false;
         }
       }

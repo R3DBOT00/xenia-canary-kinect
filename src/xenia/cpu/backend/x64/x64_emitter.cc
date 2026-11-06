@@ -13,6 +13,9 @@
 
 #include <climits>
 #include <cstring>
+#include <mutex>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/base/assert.h"
@@ -75,6 +78,69 @@ using namespace xe::literals;
 static constexpr size_t kMaxCodeSize = 1_MiB;
 
 // static const size_t kStashOffsetHigh = 32 + 32;
+
+bool ShouldTraceGuestFunction(uint32_t address) {
+  if (cvars::trace_guest_functions.empty()) {
+    return false;
+  }
+  return cvars::trace_guest_functions.find(fmt::format("{:08X}", address)) !=
+         std::string::npos;
+}
+
+uint64_t TraceGuestFunctionEntry(void* raw_context, uint64_t address) {
+  if (InvokeGuestFunctionEntryHook(raw_context,
+                                   static_cast<uint32_t>(address))) {
+    return 0;
+  }
+  const auto* context = reinterpret_cast<const ppc::PPCContext*>(raw_context);
+  const uint32_t function_address = static_cast<uint32_t>(address);
+  const uint32_t caller_address = static_cast<uint32_t>(context->lr);
+  static std::mutex caller_trace_mutex;
+  static std::unordered_set<uint64_t> traced_callers;
+  static std::unordered_map<uint32_t, uint64_t> trace_counts;
+  bool trace_caller = false;
+  uint64_t trace_sequence = 0;
+  {
+    std::lock_guard<std::mutex> lock(caller_trace_mutex);
+    trace_caller = traced_callers
+                       .insert((uint64_t(function_address) << 32) |
+                               uint64_t(caller_address))
+                       .second;
+    trace_sequence = ++trace_counts[function_address];
+  }
+  if (trace_caller && caller_address >= 16 * sizeof(uint32_t)) {
+    constexpr uint32_t kWordsBefore = 64;
+    constexpr uint32_t kWordsAfter = 64;
+    const uint32_t block_address =
+        caller_address - kWordsBefore * sizeof(uint32_t);
+    const auto* block = reinterpret_cast<const uint32_t*>(
+        context->virtual_membase + block_address);
+    std::string dump;
+    for (uint32_t i = 0; i < kWordsBefore + kWordsAfter; ++i) {
+      dump += fmt::format("{:08X}{}", xe::load_and_swap<uint32_t>(block + i),
+                          (i + 1) % 8 == 0 ? "\n" : " ");
+    }
+    XELOGI("GuestTrace caller block pc={:08X} lr={:08X} "
+           "range={:08X}..{:08X}:\n{}",
+           function_address, caller_address, block_address,
+           block_address + (kWordsBefore + kWordsAfter) * sizeof(uint32_t),
+           dump);
+  }
+  if (trace_sequence <= 64 || trace_sequence % 1024 == 0) {
+    XELOGI("GuestTrace: pc={:08X} lr={:08X} sequence={} r3={:08X} r4={:08X} "
+           "r5={:08X} r6={:08X} r7={:08X} r8={:08X} r9={:08X} r10={:08X}",
+           function_address, caller_address, trace_sequence,
+           static_cast<uint32_t>(context->r[3]),
+           static_cast<uint32_t>(context->r[4]),
+           static_cast<uint32_t>(context->r[5]),
+           static_cast<uint32_t>(context->r[6]),
+           static_cast<uint32_t>(context->r[7]),
+           static_cast<uint32_t>(context->r[8]),
+           static_cast<uint32_t>(context->r[9]),
+           static_cast<uint32_t>(context->r[10]));
+  }
+  return 0;
+}
 
 constexpr uint32_t X64Emitter::gpr_reg_map_[X64Emitter::GPR_COUNT] = {
     Xbyak::Operand::RBX, Xbyak::Operand::R10, Xbyak::Operand::R11,
@@ -227,6 +293,10 @@ bool X64Emitter::Emit(HIRBuilder* builder, EmitFunctionInfo& func_info) {
   mov(qword[rsp + StackLayout::GUEST_RET_ADDR], rcx);
 
   mov(qword[rsp + StackLayout::GUEST_CALL_RET_ADDR], rax);  // 0
+
+  if (ShouldTraceGuestFunction(current_guest_function_)) {
+    CallNative(TraceGuestFunctionEntry, current_guest_function_);
+  }
 
 #if XE_X64_PROFILER_AVAILABLE == 1
   if (cvars::instrument_call_times) {

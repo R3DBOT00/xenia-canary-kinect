@@ -179,9 +179,14 @@ class TextureCache {
 
     // Physical 4 KB page with the base mip level, disregarding A/C/E address
     // range prefix.
-    uint32_t base_page : 17;             // 17 total
-    xenos::DataDimension dimension : 2;  // 19
-    uint32_t width_minus_1 : 13;         // 32
+    uint32_t base_page : 17;
+    xenos::DataDimension dimension : 2;
+    uint32_t _pad_base : 13;
+
+    // 1D fetch constants have a 24-bit width. Keep it intact so long linear
+    // buffers can be packed into multiple host rows.
+    uint32_t width_minus_1 : 24;
+    uint32_t _pad_width : 8;
 
     uint32_t height_minus_1 : 13;  // 45
     uint32_t tiled : 1;            // 46
@@ -227,6 +232,20 @@ class TextureCache {
     uint32_t GetHeight() const { return height_minus_1 + 1; }
     uint32_t GetDepthOrArraySize() const {
       return depth_or_array_size_minus_1 + 1;
+    }
+    static constexpr uint32_t kLong1DPackedWidth = 8192;
+    bool IsLong1D() const {
+      return dimension == xenos::DataDimension::k1D &&
+             GetWidth() > kLong1DPackedWidth;
+    }
+    uint32_t GetHostWidth() const {
+      return IsLong1D() ? kLong1DPackedWidth : GetWidth();
+    }
+    uint32_t GetHostHeight() const {
+      return IsLong1D()
+                 ? (GetWidth() + kLong1DPackedWidth - 1) /
+                       kLong1DPackedWidth
+                 : GetHeight();
     }
 
     texture_util::TextureGuestLayout GetGuestLayout() const {
@@ -574,6 +593,7 @@ class TextureCache {
       xenos::DataDimension dimension) const = 0;
   virtual uint32_t GetMaxHostTextureDepthOrArraySize(
       xenos::DataDimension dimension) const = 0;
+  virtual bool SupportsLong1DTextures() const { return false; }
 
   // The texture must be created exactly with this key (if the implementation
   // supports the texture with this key, otherwise, or in case of a runtime
@@ -609,9 +629,9 @@ class TextureCache {
   // Converts a texture fetch constant to a texture key, normalizing and
   // validating the values, or creating an invalid key, and also gets the
   // post-guest-swizzle signedness.
-  static void BindingInfoFromFetchConstant(
+  void BindingInfoFromFetchConstant(
       const xenos::xe_gpu_texture_fetch_t& fetch, TextureKey& key_out,
-      uint8_t* swizzled_signs_out);
+      uint8_t* swizzled_signs_out) const;
 
   // Makes all texture bindings invalid. Also requesting textures after calling
   // this will cause another attempt to create a texture or to untile it if

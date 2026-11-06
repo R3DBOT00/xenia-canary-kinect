@@ -81,7 +81,7 @@ X_STATUS XFile::QueryDirectory(X_FILE_DIRECTORY_INFORMATION* out_info,
   if (reinterpret_cast<uint8_t*>(&out_info->file_name[0]) + entry_name.size() >
       end) {
     assert_always("Buffer overflow?");
-    return X_STATUS_NO_SUCH_FILE;
+    return X_STATUS_BUFFER_OVERFLOW;
   }
 
   out_info->next_entry_offset = 0;

@@ -347,6 +347,17 @@ class ResultBase : public Result {
   T value_;
 };
 
+class FloatResult : public Result {
+ public:
+  FloatResult(float value) : value_(value) {}
+  void Store(PPCContext* ppc_context) override {
+    ppc_context->f[1] = static_cast<double>(value_);
+  }
+
+ private:
+  float value_;
+};
+
 }  // namespace shim
 
 using int_t = const shim::ParamBase<int32_t>&;
@@ -374,6 +385,7 @@ using dword_result_t = shim::ResultBase<uint32_t>;
 using qword_result_t = shim::ResultBase<uint64_t>;
 using pointer_result_t = shim::ResultBase<uint32_t>;
 using X_HRESULT_result_t = shim::ResultBase<X_HRESULT>;
+using float_result_t = shim::FloatResult;
 using ppc_context_t = shim::ContextParam;
 
 // Exported from kernel_state.cc.

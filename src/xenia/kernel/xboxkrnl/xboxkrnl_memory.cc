@@ -171,6 +171,11 @@ dword_result_t NtAllocateVirtualMemory_entry(lpdword_t base_addr_ptr,
     if (heap->AllocFixed(adjusted_base, adjusted_size, page_size,
                          allocation_type, protect)) {
       address = adjusted_base;
+    } else {
+      // A fixed reservation that overlaps an existing guest allocation is
+      // distinct from an exhausted heap. Retail callers use this status to
+      // choose a different base address.
+      return static_cast<X_STATUS>(0xC0000018u);
     }
   } else {
     bool top_down = !!(alloc_type & X_MEM_TOP_DOWN);

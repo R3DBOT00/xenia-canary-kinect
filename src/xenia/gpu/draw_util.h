@@ -543,6 +543,10 @@ union ResolveCoordinateInfo {
     // 1 to 7.
     uint32_t draw_resolution_scale_x : 3;
     uint32_t draw_resolution_scale_y : 3;
+
+    // For constant-one copies to a compressed texture, destination addressing
+    // uses pairs of 4x4 blocks while source geometry stays in texels.
+    uint32_t copy_dest_is_compressed : 1;
   };
   ResolveCoordinateInfo() : packed(0) {
     static_assert_size(*this, sizeof(packed));
@@ -571,6 +575,9 @@ union ResolveCopyDestCoordinateInfo {
     uint32_t offset_y_div_8 : 7 - xenos::kResolveAlignmentPixelsLog2;
 
     xenos::CopySampleSelect copy_sample_select : 3;
+    // RB_COPY_CONTROL::kConstantOne writes a format-native one instead of
+    // reading EDRAM. Kept in the spare high bit for the copy shaders.
+    uint32_t copy_command_constant_one : 1;
   };
   ResolveCopyDestCoordinateInfo() : packed(0) {
     static_assert_size(*this, sizeof(packed));
@@ -764,7 +771,10 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
                     uint32_t draw_resolution_scale_y,
                     bool fixed_rg16_truncated_to_minus_1_to_1,
                     bool fixed_rgba16_truncated_to_minus_1_to_1,
-                    ResolveInfo& info_out);
+                    ResolveInfo& info_out,
+                    xenos::PrimitiveType primitive_type =
+                        xenos::PrimitiveType::kRectangleList,
+                    uint32_t vertex_count = 3, bool indexed = false);
 
 // Returns log2 of the resolve copy destination texel size in bytes for the
 // destination info previously returned by a render target cache Resolve (with

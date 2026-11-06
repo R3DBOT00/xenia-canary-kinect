@@ -23,6 +23,13 @@ int lzx_decompress(const void* lzx_data, size_t lzx_len, void* dest,
                    size_t dest_len, uint32_t window_size, void* window_data,
                    size_t window_data_len);
 
+struct lzx_stream;
+
+lzx_stream* lzx_stream_create(uint32_t window_size);
+int lzx_stream_decompress(lzx_stream* stream, const void* lzx_data,
+                          size_t lzx_len, void* dest, size_t dest_len);
+void lzx_stream_destroy(lzx_stream* stream);
+
 int lzxdelta_apply_patch(xe::xex2_delta_patch* patch, size_t patch_len,
                          uint32_t window_size, void* dest);
 

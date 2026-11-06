@@ -20,8 +20,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #define NOMINMAX
-#include <ObjBase.h>
-#include <SDKDDKVer.h>
+#include <objbase.h>
+#include <sdkddkver.h>
 #include <bcrypt.h>
 #include <dwmapi.h>
 #include <shellapi.h>

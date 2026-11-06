@@ -42,18 +42,18 @@
 #if !XE_PLATFORM_ANDROID
 #include "xenia/apu/sdl/sdl_audio_system.h"
 #endif  // !XE_PLATFORM_ANDROID
-#if XE_PLATFORM_WIN32
+#if XE_PLATFORM_WIN32 && XE_COMPILER_MSVC
 #include "xenia/apu/xaudio2/xaudio2_audio_system.h"
-#endif  // XE_PLATFORM_WIN32
+#endif  // XE_PLATFORM_WIN32 && XE_COMPILER_MSVC
 
 // Available graphics systems:
 #include "xenia/gpu/null/null_graphics_system.h"
 #if !XE_PLATFORM_MAC
+#if XE_PLATFORM_WIN32 && XE_COMPILER_MSVC
+#include "xenia/gpu/d3d12/d3d12_graphics_system.h"
+#endif
 #include "xenia/gpu/vulkan/vulkan_graphics_system.h"
 #endif
-#if XE_PLATFORM_WIN32
-#include "xenia/gpu/d3d12/d3d12_graphics_system.h"
-#endif  // XE_PLATFORM_WIN32
 
 // Available input drivers:
 #include "xenia/hid/nop/nop_hid.h"
@@ -65,7 +65,7 @@
 #include "xenia/hid/xinput/xinput_hid.h"
 #endif  // XE_PLATFORM_WIN32
 
-#if XE_PLATFORM_WIN32
+#if XE_PLATFORM_WIN32 && XE_COMPILER_MSVC
 #define APU_OPTIONS "[any, nop, sdl, xaudio2]"
 #define GPU_OPTIONS "[any, d3d12, vulkan, null]"
 #define HID_OPTIONS "[any, nop, sdl, winkey, xinput]"
@@ -315,9 +315,9 @@ EmulatorApp::~EmulatorApp() {
 std::unique_ptr<apu::AudioSystem> EmulatorApp::CreateAudioSystem(
     cpu::Processor* processor) {
   Factory<apu::AudioSystem, cpu::Processor*> factory;
-#if XE_PLATFORM_WIN32
+#if XE_PLATFORM_WIN32 && XE_COMPILER_MSVC
   factory.Add<apu::xaudio2::XAudio2AudioSystem>("xaudio2");
-#endif  // XE_PLATFORM_WIN32
+#endif  // XE_PLATFORM_WIN32 && XE_COMPILER_MSVC
 #if XE_PLATFORM_LINUX
   factory.Add<apu::alsa::ALSAAudioSystem>("alsa");
 #endif  // XE_PLATFORM_LINUX
@@ -405,9 +405,9 @@ std::unique_ptr<gpu::GraphicsSystem> EmulatorApp::CreateGraphicsSystem() {
     return std::make_unique<gpu::null::NullGraphicsSystem>();
   }
   Factory<gpu::GraphicsSystem> factory;
-#if XE_PLATFORM_WIN32
+#if XE_PLATFORM_WIN32 && XE_COMPILER_MSVC
   factory.Add<gpu::d3d12::D3D12GraphicsSystem>("d3d12");
-#endif  // XE_PLATFORM_WIN32
+#endif
 #if !XE_PLATFORM_MAC
   factory.Add<gpu::vulkan::VulkanGraphicsSystem>("vulkan");
 #endif
@@ -422,11 +422,6 @@ std::unique_ptr<gpu::GraphicsSystem> EmulatorApp::CreateGraphicsSystem() {
         "feature.\n"
         "\n"
 #else
-#if XE_PLATFORM_WIN32
-        "For Direct3D 12, at least Windows 10 is required, and the GPU must be "
-        "compatible with Direct3D 12 feature level 11_0.\n"
-        "\n"
-#endif  // XE_PLATFORM_WIN32
         "For Vulkan, the Vulkan runtime must be installed, and the GPU must "
         "support at least Vulkan 1.0. The Vulkan runtime can be downloaded at "
         "https://vulkan.lunarg.com/sdk/home.\n"
@@ -576,7 +571,7 @@ void EmulatorApp::OnDestroy() {
 
   xe::FlushLog();
 
-  std::quick_exit(EXIT_SUCCESS);
+  std::exit(EXIT_SUCCESS);
 }
 
 void EmulatorApp::EmulatorThread() {
@@ -778,7 +773,7 @@ void EmulatorApp::EmulatorThread() {
 }
 
 void EmulatorApp::ShutdownEmulatorThreadFromUIThread() {
-  // TODO(Triang3l): Proper shutdown of the emulator (relying on std::quick_exit
+  // TODO(Triang3l): Proper shutdown of the emulator (relying on std::exit
   // for now) - currently WaitUntilExit loops forever otherwise (plus possibly
   // lots of other things not shutting down correctly now). Some parts of the
   // code call the regular std::exit, which seems to be calling destructors (at

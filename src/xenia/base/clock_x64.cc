@@ -27,6 +27,17 @@
     (edx) = static_cast<uint32_t>(__xe_cpuid_registers_[3]); \
   }
 #define xe_cpu_rdtsc() __rdtsc()
+#elif XE_COMPILER_MINGW32
+#define xe_cpu_cpuid(level, eax, ebx, ecx, edx)              \
+  {                                                          \
+    int __xe_cpuid_registers_[4];                            \
+    __cpuidex(__xe_cpuid_registers_, (level), 0);            \
+    (eax) = static_cast<uint32_t>(__xe_cpuid_registers_[0]); \
+    (ebx) = static_cast<uint32_t>(__xe_cpuid_registers_[1]); \
+    (ecx) = static_cast<uint32_t>(__xe_cpuid_registers_[2]); \
+    (edx) = static_cast<uint32_t>(__xe_cpuid_registers_[3]); \
+  }
+#define xe_cpu_rdtsc() __rdtsc()
 #elif XE_COMPILER_CLANG || XE_COMPILER_GNUC
 #include <cpuid.h>
 #define xe_cpu_cpuid(level, eax, ebx, ecx, edx) \

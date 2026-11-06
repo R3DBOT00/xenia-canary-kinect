@@ -1186,16 +1186,47 @@ D3D12TextureCache::GetCurrentScaledResolveRangeGPUAddress() const {
 ID3D12Resource* D3D12TextureCache::RequestSwapTexture(
     D3D12_SHADER_RESOURCE_VIEW_DESC& srv_desc_out,
     xenos::TextureFormat& format_out) {
+  static uint64_t swap_request_sequence = 0;
+  const uint64_t request_sequence = ++swap_request_sequence;
+  const bool log_request =
+      request_sequence <= 8 || request_sequence % 60 == 0;
   const auto& regs = register_file();
   xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(0);
   TextureKey key;
   BindingInfoFromFetchConstant(fetch, key, nullptr);
+  if (log_request) {
+    XELOGI("D3D12 swap texture request: sequence={} fetch={:08X} {:08X} "
+           "{:08X} {:08X} {:08X} {:08X} key_valid={} base={:08X} "
+           "size={}x{} pitch={} format={} tiled={} endian={}",
+           request_sequence, fetch.dword_0, fetch.dword_1, fetch.dword_2,
+           fetch.dword_3, fetch.dword_4, fetch.dword_5, bool(key.is_valid),
+           key.base_page << 12, key.GetWidth(), key.GetHeight(),
+           key.pitch << 5, uint32_t(key.format), bool(key.tiled),
+           uint32_t(key.endianness));
+  }
   if (!key.is_valid || key.base_page == 0 ||
       key.dimension != xenos::DataDimension::k2DOrStacked) {
+    if (log_request) {
+      XELOGI("D3D12 swap texture rejected: sequence={} valid={} base={:08X} "
+             "dimension={}",
+             request_sequence, bool(key.is_valid), key.base_page << 12,
+             uint32_t(key.dimension));
+    }
     return nullptr;
   }
   D3D12Texture* texture = static_cast<D3D12Texture*>(FindOrCreateTexture(key));
-  if (texture == nullptr || !LoadTextureData(*texture)) {
+  if (texture == nullptr) {
+    if (log_request) {
+      XELOGI("D3D12 swap texture creation failed: sequence={}",
+             request_sequence);
+    }
+    return nullptr;
+  }
+  if (!LoadTextureData(*texture)) {
+    if (log_request) {
+      XELOGI("D3D12 swap texture load failed: sequence={} base={:08X}",
+             request_sequence, key.base_page << 12);
+    }
     return nullptr;
   }
   texture->MarkAsUsed();
@@ -1217,6 +1248,13 @@ ID3D12Resource* D3D12TextureCache::RequestSwapTexture(
   srv_desc_out.Texture2D.PlaneSlice = 0;
   srv_desc_out.Texture2D.ResourceMinLODClamp = 0.0f;
   format_out = key.format;
+  if (log_request) {
+    const D3D12_RESOURCE_DESC resource_desc = texture_resource->GetDesc();
+    XELOGI("D3D12 swap texture ready: sequence={} base={:08X} host={}x{} "
+           "dxgi_format={}",
+           request_sequence, key.base_page << 12, resource_desc.Width,
+           resource_desc.Height, uint32_t(resource_desc.Format));
+  }
   return texture_resource;
 }
 
@@ -1344,8 +1382,8 @@ std::unique_ptr<TextureCache::Texture> D3D12TextureCache::CreateTexture(
     desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
   }
   desc.Alignment = 0;
-  desc.Width = key.GetWidth();
-  desc.Height = key.GetHeight();
+  desc.Width = key.GetHostWidth();
+  desc.Height = key.GetHostHeight();
   if (key.scaled_resolve) {
     desc.Width *= draw_resolution_scale_x();
     desc.Height *= draw_resolution_scale_y();
@@ -1409,6 +1447,9 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
   bool is_3d_tiling = is_3d || d3d12_texture.force_load_3d_tiling();
   uint32_t width = texture_key.GetWidth();
   uint32_t height = texture_key.GetHeight();
+  const bool is_long_1d = texture_key.IsLong1D();
+  const uint32_t host_width = texture_key.GetHostWidth();
+  const uint32_t host_height = texture_key.GetHostHeight();
   uint32_t depth_or_array_size = texture_key.GetDepthOrArraySize();
   uint32_t depth = is_3d ? depth_or_array_size : 1;
   uint32_t array_size = is_3d ? 1 : depth_or_array_size;
@@ -1475,7 +1516,7 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
   // properly padded to the number of blocks copied in an invocation without
   // implicit assumptions about D3D12_TEXTURE_DATA_PITCH_ALIGNMENT.
   DXGI_FORMAT host_copy_format =
-      GetDXGIResourceFormat(guest_format, width, height);
+      GetDXGIResourceFormat(guest_format, host_width, host_height);
   for (uint32_t loop_level = loop_level_first; loop_level <= loop_level_last;
        ++loop_level) {
     bool is_base = loop_level == 0;
@@ -1496,9 +1537,9 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
       level_host_slice_layout.Footprint.Depth = guest_layout_packed.z_extent;
     } else {
       level_host_slice_layout.Footprint.Width =
-          std::max(width >> level, uint32_t(1));
+          is_long_1d ? host_width : std::max(width >> level, uint32_t(1));
       level_host_slice_layout.Footprint.Height =
-          std::max(height >> level, uint32_t(1));
+          is_long_1d ? host_height : std::max(height >> level, uint32_t(1));
       level_host_slice_layout.Footprint.Depth =
           std::max(depth >> level, uint32_t(1));
     }
@@ -1704,7 +1745,9 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
         level ? host_slice_sizes_mips[guest_level] : host_slice_size_base;
     D3D12_BOX source_box;
     const D3D12_BOX* source_box_ptr;
-    if (level >= level_packed) {
+    if (is_long_1d) {
+      source_box_ptr = nullptr;
+    } else if (level >= level_packed) {
       uint32_t level_offset_blocks_x, level_offset_blocks_y, level_offset_z;
       texture_util::GetPackedMipOffset(width, height, depth, guest_format,
                                        level, level_offset_blocks_x,

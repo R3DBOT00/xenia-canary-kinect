@@ -843,9 +843,9 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
     size_needed_components |= offsets_not_zero;
     switch (instr.dimension) {
       case xenos::FetchOpDimension::k1D:
-        if (instr.attributes.unnormalized_coordinates) {
-          size_needed_components |= 0b0001;
-        }
+        // Long 1D resources are packed into 8192-texel host rows, so their
+        // logical width is also needed for normalized coordinates.
+        size_needed_components |= 0b0001;
         break;
       case xenos::FetchOpDimension::k2D:
         if (instr.attributes.unnormalized_coordinates) {
@@ -1188,9 +1188,48 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
     }
     switch (instr.dimension) {
       case xenos::FetchOpDimension::k1D:
-        // Pad to 2D array coordinates.
+        // Long 1D resources are represented as an 8192-wide 2D texture. Map
+        // the normalized logical coordinate to a normalized column and row.
         a_.OpMov(dxbc::Dest::R(coord_and_sampler_temp, 0b0110),
+                  dxbc::Src::LF(0.0f));
+        a_.OpFToU(dxbc::Dest::R(coord_and_sampler_temp, 0b1000),
+                  dxbc::Src::R(size_and_is_3d_temp, dxbc::Src::kXXXX));
+        a_.OpUGE(dxbc::Dest::R(coord_and_sampler_temp, 0b1000),
+                 dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kWWWW),
+                 dxbc::Src::LU(8193));
+        a_.OpIf(true,
+                dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kWWWW));
+        a_.OpMul(dxbc::Dest::R(coord_and_sampler_temp, 0b1000),
+                 dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kXXXX),
+                 dxbc::Src::R(size_and_is_3d_temp, dxbc::Src::kXXXX));
+        a_.OpMul(
+            dxbc::Dest::R(coord_and_sampler_temp, 0b1000),
+            dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kWWWW),
+            dxbc::Src::LF(1.0f / 8192.0f));
+        a_.OpRoundNI(dxbc::Dest::R(coord_and_sampler_temp, 0b0010),
+                     dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kWWWW));
+        a_.OpFrc(dxbc::Dest::R(coord_and_sampler_temp, 0b0001),
+                 dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kWWWW));
+        a_.OpFToU(dxbc::Dest::R(coord_and_sampler_temp, 0b0100),
+                  dxbc::Src::R(size_and_is_3d_temp, dxbc::Src::kXXXX));
+        a_.OpIAdd(dxbc::Dest::R(coord_and_sampler_temp, 0b0100),
+                  dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kZZZZ),
+                  dxbc::Src::LU(8191));
+        a_.OpUShR(
+            dxbc::Dest::R(coord_and_sampler_temp, 0b0100),
+            dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kZZZZ),
+            dxbc::Src::LU(13));
+        a_.OpUToF(dxbc::Dest::R(coord_and_sampler_temp, 0b0100),
+                  dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kZZZZ));
+        a_.OpAdd(dxbc::Dest::R(coord_and_sampler_temp, 0b0010),
+                 dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kYYYY),
+                 dxbc::Src::LF(0.5f));
+        a_.OpDiv(dxbc::Dest::R(coord_and_sampler_temp, 0b0010),
+                 dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kYYYY),
+                 dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kZZZZ));
+        a_.OpMov(dxbc::Dest::R(coord_and_sampler_temp, 0b0100),
                  dxbc::Src::LF(0.0f));
+        a_.OpEndIf();
         break;
       case xenos::FetchOpDimension::k2D:
         // Pad to 2D array coordinates.

@@ -8,6 +8,7 @@
  */
 
 #include "xenia/base/logging.h"
+#include "xenia/base/utf8.h"
 #include "xenia/kernel/info/file.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
@@ -26,14 +27,14 @@ namespace xboxkrnl {
 
 struct CreateOptions {
   // https://processhacker.sourceforge.io/doc/ntioapi_8h.html
-  static constexpr uint32_t FILE_DIRECTORY_FILE = 0x00000001;
+  static constexpr uint32_t kFileDirectoryFile = 0x00000001;
   // Optimization - files access will be sequential, not random.
-  static constexpr uint32_t FILE_SEQUENTIAL_ONLY = 0x00000004;
-  static constexpr uint32_t FILE_SYNCHRONOUS_IO_ALERT = 0x00000010;
-  static constexpr uint32_t FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020;
-  static constexpr uint32_t FILE_NON_DIRECTORY_FILE = 0x00000040;
+  static constexpr uint32_t kFileSequentialOnly = 0x00000004;
+  static constexpr uint32_t kFileSynchronousIoAlert = 0x00000010;
+  static constexpr uint32_t kFileSynchronousIoNonalert = 0x00000020;
+  static constexpr uint32_t kFileNonDirectoryFile = 0x00000040;
   // Optimization - file access will be random, not sequential.
-  static constexpr uint32_t FILE_RANDOM_ACCESS = 0x00000800;
+  static constexpr uint32_t kFileRandomAccess = 0x00000800;
 };
 
 dword_result_t NtCreateFile_entry(lpdword_t handle_out, dword_t desired_access,
@@ -42,7 +43,8 @@ dword_result_t NtCreateFile_entry(lpdword_t handle_out, dword_t desired_access,
                                   lpqword_t allocation_size_ptr,
                                   dword_t file_attributes, dword_t share_access,
                                   dword_t creation_disposition,
-                                  dword_t create_options) {
+                                  dword_t create_options,
+                                  const ppc_context_t& ctx) {
   uint64_t allocation_size = 0;  // is this correct???
   if (allocation_size_ptr) {
     allocation_size = *allocation_size_ptr;
@@ -83,17 +85,29 @@ dword_result_t NtCreateFile_entry(lpdword_t handle_out, dword_t desired_access,
   X_STATUS result = kernel_state()->file_system()->OpenFile(
       root_entry, target_path,
       vfs::FileDisposition((uint32_t)creation_disposition), desired_access,
-      (create_options & CreateOptions::FILE_DIRECTORY_FILE) != 0,
-      (create_options & CreateOptions::FILE_NON_DIRECTORY_FILE) != 0, &vfs_file,
+      (create_options & CreateOptions::kFileDirectoryFile) != 0,
+      (create_options & CreateOptions::kFileNonDirectoryFile) != 0, &vfs_file,
       &file_action);
+  if (XFAILED(result)) {
+    XELOGD(
+        "NtCreateFile failed: caller={:08X} status={:08X} root={:08X} "
+        "root_path='{}' path='{}' access={:08X} disposition={} "
+        "options={:08X}",
+        uint32_t(ctx->lr), result,
+        static_cast<uint32_t>(object_attrs->root_directory),
+        root_entry ? root_entry->absolute_path() : std::string_view(),
+        target_path, static_cast<uint32_t>(desired_access),
+        static_cast<uint32_t>(creation_disposition),
+        static_cast<uint32_t>(create_options));
+  }
   object_ref<XFile> file = nullptr;
 
   X_HANDLE handle = X_INVALID_HANDLE_VALUE;
   if (XSUCCEEDED(result)) {
     // If true, desired_access SYNCHRONIZE flag must be set.
     bool synchronous =
-        (create_options & CreateOptions::FILE_SYNCHRONOUS_IO_ALERT) ||
-        (create_options & CreateOptions::FILE_SYNCHRONOUS_IO_NONALERT);
+        (create_options & CreateOptions::kFileSynchronousIoAlert) ||
+        (create_options & CreateOptions::kFileSynchronousIoNonalert);
     file = object_ref<XFile>(new XFile(kernel_state(), vfs_file, synchronous));
 
     // Handle ref is incremented, so return that.
@@ -114,11 +128,12 @@ DECLARE_XBOXKRNL_EXPORT1(NtCreateFile, kFileSystem, kImplemented);
 dword_result_t NtOpenFile_entry(
     lpdword_t handle_out, dword_t desired_access,
     pointer_t<X_OBJECT_ATTRIBUTES> object_attributes,
-    pointer_t<X_IO_STATUS_BLOCK> io_status_block, dword_t open_options) {
+    pointer_t<X_IO_STATUS_BLOCK> io_status_block, dword_t open_options,
+    const ppc_context_t& ctx) {
   return NtCreateFile_entry(
       handle_out, desired_access, object_attributes, io_status_block, nullptr,
       0, 0, static_cast<uint32_t>(xe::vfs::FileDisposition::kOpen),
-      open_options);
+      open_options, ctx);
 }
 DECLARE_XBOXKRNL_EXPORT1(NtOpenFile, kFileSystem, kImplemented);
 
@@ -126,7 +141,8 @@ dword_result_t NtReadFile_entry(dword_t file_handle, dword_t event_handle,
                                 lpvoid_t apc_routine_ptr, lpvoid_t apc_context,
                                 pointer_t<X_IO_STATUS_BLOCK> io_status_block,
                                 lpvoid_t buffer, dword_t buffer_length,
-                                lpqword_t byte_offset_ptr) {
+                                lpqword_t byte_offset_ptr,
+                                const ppc_context_t& ctx) {
   X_STATUS result = X_STATUS_SUCCESS;
 
   bool signal_event = false;
@@ -148,6 +164,25 @@ dword_result_t NtReadFile_entry(dword_t file_handle, dword_t event_handle,
           buffer.guest_address(), buffer_length,
           byte_offset_ptr ? static_cast<uint64_t>(*byte_offset_ptr) : -1,
           &bytes_read, apc_context);
+      XELOGD(
+          "NtReadFile completed: caller={:08X} status={:08X} path='{}' "
+          "offset={:016X} requested={} actual={} synchronous={} event={:08X} "
+          "apc={:08X}",
+          uint32_t(ctx->lr), result, file->entry()->absolute_path(),
+          byte_offset_ptr ? static_cast<uint64_t>(*byte_offset_ptr)
+                          : uint64_t(-1),
+          static_cast<uint32_t>(buffer_length), bytes_read,
+          file->is_synchronous(), uint32_t(event_handle),
+          uint32_t(apc_routine_ptr));
+      if (XFAILED(result) && result != X_STATUS_END_OF_FILE) {
+        XELOGD(
+            "NtReadFile failed: status={:08X} path='{}' offset={:016X} "
+            "length={}",
+            result, file->entry()->absolute_path(),
+            byte_offset_ptr ? static_cast<uint64_t>(*byte_offset_ptr)
+                            : uint64_t(-1),
+            static_cast<uint32_t>(buffer_length));
+      }
       if (io_status_block) {
         io_status_block->status = result;
         io_status_block->information = bytes_read;
@@ -162,10 +197,6 @@ dword_result_t NtReadFile_entry(dword_t file_handle, dword_t event_handle,
           thread->EnqueueApc(static_cast<uint32_t>(apc_routine_ptr) & ~1u,
                              apc_context, io_status_block, 0);
         }
-      }
-
-      if (!file->is_synchronous() && result != X_STATUS_END_OF_FILE) {
-        result = X_STATUS_PENDING;
       }
 
       // Mark that we should signal the event now. We do this after
@@ -256,10 +287,6 @@ dword_result_t NtReadFileScatter_entry(
         }
       }
 
-      if (!file->is_synchronous()) {
-        result = X_STATUS_PENDING;
-      }
-
       // Mark that we should signal the event now. We do this after
       // we have written the info out.
       signal_event = true;
@@ -346,10 +373,6 @@ dword_result_t NtWriteFile_entry(dword_t file_handle, dword_t event_handle,
           thread->EnqueueApc(static_cast<uint32_t>(apc_routine) & ~1u,
                              apc_context, io_status_block, 0);
         }
-      }
-
-      if (!file->is_synchronous()) {
-        result = X_STATUS_PENDING;
       }
 
       // Mark that we should signal the event now. We do this after
@@ -478,13 +501,15 @@ dword_result_t NtQueryFullAttributesFile_entry(
       kernel_memory()->TranslateVirtual<X_ANSI_STRING*>(obj_attribs->name_ptr);
 
   object_ref<XFile> root_file;
+  vfs::Entry* root_entry = nullptr;
   if (obj_attribs->root_directory != 0xFFFFFFFD &&  // ObDosDevices
       obj_attribs->root_directory != 0) {
     root_file = kernel_state()->object_table()->LookupObject<XFile>(
         obj_attribs->root_directory);
-    assert_not_null(root_file);
-    assert_true(root_file->type() == XObject::Type::File);
-    assert_always();
+    if (!root_file || root_file->type() != XObject::Type::File) {
+      return X_STATUS_INVALID_HANDLE;
+    }
+    root_entry = root_file->entry();
   }
 
   auto target_path = util::TranslateAnsiPath(kernel_memory(), object_name);
@@ -495,7 +520,9 @@ dword_result_t NtQueryFullAttributesFile_entry(
   }
 
   // Resolve the file using the virtual file system.
-  auto entry = kernel_state()->file_system()->ResolvePath(target_path);
+  auto entry = root_entry
+                   ? root_entry->ResolvePath(target_path)
+                   : kernel_state()->file_system()->ResolvePath(target_path);
   if (entry) {
     // Found.
     file_info->creation_time = entry->create_timestamp();
@@ -509,7 +536,13 @@ dword_result_t NtQueryFullAttributesFile_entry(
     return X_STATUS_SUCCESS;
   }
 
-  return X_STATUS_NO_SUCH_FILE;
+  XELOGD(
+      "NtQueryFullAttributesFile failed: root={:08X} root_path='{}' "
+      "path='{}'",
+      static_cast<uint32_t>(obj_attribs->root_directory),
+      root_entry ? root_entry->absolute_path() : std::string_view(),
+      target_path);
+  return X_STATUS_OBJECT_NAME_NOT_FOUND;
 }
 DECLARE_XBOXKRNL_EXPORT1(NtQueryFullAttributesFile, kFileSystem, kImplemented);
 
@@ -534,14 +567,22 @@ dword_result_t NtQueryDirectoryFile_entry(
   }
 
   if (file) {
-    X_FILE_DIRECTORY_INFORMATION dir_info = {0};
     result =
         file->QueryDirectory(file_info_ptr, length, name, restart_scan != 0);
     if (XSUCCEEDED(result)) {
-      info = length;
+      info = 64 + static_cast<uint32_t>(file_info_ptr->file_name_length);
     }
   } else {
     result = X_STATUS_NO_SUCH_FILE;
+  }
+
+  if (XFAILED(result) && result != X_STATUS_NO_MORE_FILES) {
+    XELOGD(
+        "NtQueryDirectoryFile failed: status={:08X} handle={:08X} "
+        "directory='{}' pattern='{}' restart={} length={}",
+        result, static_cast<uint32_t>(file_handle),
+        file ? file->entry()->absolute_path() : std::string_view(), name,
+        static_cast<uint32_t>(restart_scan), static_cast<uint32_t>(length));
   }
 
   if (XFAILED(result)) {
@@ -641,7 +682,6 @@ dword_result_t FscSetCacheElementCount_entry(dword_t unk_0, dword_t unk_1) {
   return X_STATUS_SUCCESS;
 }
 DECLARE_XBOXKRNL_EXPORT1(FscSetCacheElementCount, kFileSystem, kStub);
-// todo: this should fill in the io status block and queue the apc
 dword_result_t NtDeviceIoControlFile_entry(
     dword_t handle, dword_t event_handle, dword_t apc_routine,
     dword_t apc_context, pointer_t<X_IO_STATUS_BLOCK> io_status_block,
@@ -651,31 +691,73 @@ dword_result_t NtDeviceIoControlFile_entry(
   // (checks if the returned values look valid, values below seem to pass the
   // checks)
   constexpr uint32_t cache_size = 0xFF000;
+  X_STATUS result = X_STATUS_SUCCESS;
+  uint32_t information = 0;
 
-  if (io_control_code == X_IOCTL_DISK_GET_DRIVE_GEOMETRY) {
-    if (output_buffer_len < 0x8) {
-      assert_always();
-      return X_STATUS_BUFFER_TOO_SMALL;
-    }
-    xe::store_and_swap<uint32_t>(output_buffer, cache_size / 512);
-    xe::store_and_swap<uint32_t>(output_buffer + 4, 512);
-  } else if (io_control_code == X_IOCTL_DISK_GET_PARTITION_INFO) {
-    if (output_buffer_len < 0x10) {
-      assert_always();
-      return X_STATUS_BUFFER_TOO_SMALL;
-    }
-    xe::store_and_swap<uint64_t>(output_buffer, 0);
-    xe::store_and_swap<uint64_t>(output_buffer + 8, cache_size);
-  } else {
-    XELOGD("NtDeviceIoControlFile(0x{:X}) - unhandled IOCTL!",
-           uint32_t(io_control_code));
-    assert_always();
-    return X_STATUS_INVALID_PARAMETER;
+  auto event = kernel_state()->object_table()->LookupObject<XEvent>(event_handle);
+  if (event_handle && !event) {
+    result = X_STATUS_INVALID_HANDLE;
   }
 
-  return X_STATUS_SUCCESS;
+  auto file = kernel_state()->object_table()->LookupObject<XFile>(handle);
+
+  const bool is_xex_image =
+      file && file->name().size() >= 4 &&
+      xe::utf8::equal_case(file->name().substr(file->name().size() - 4),
+                           ".xex");
+  if (XSUCCEEDED(result) && io_control_code == X_IOCTL_IMAGE_GET_INFO &&
+      is_xex_image) {
+    // The image device uses this request as a validity/status query for an
+    // opened XEX. The caller consumes the I/O status block; there is no
+    // payload to synthesize for the four-byte output buffer.
+    XELOGD("NtDeviceIoControlFile(Image, 0x{:X}): image is valid",
+           uint32_t(io_control_code));
+  } else if (XSUCCEEDED(result) &&
+      io_control_code == X_IOCTL_DISK_GET_DRIVE_GEOMETRY) {
+    if (output_buffer_len < 0x8) {
+      result = X_STATUS_BUFFER_TOO_SMALL;
+    } else {
+      xe::store_and_swap<uint32_t>(output_buffer, cache_size / 512);
+      xe::store_and_swap<uint32_t>(output_buffer + 4, 512);
+      information = 0x8;
+    }
+  } else if (XSUCCEEDED(result) &&
+             io_control_code == X_IOCTL_DISK_GET_PARTITION_INFO) {
+    if (output_buffer_len < 0x10) {
+      result = X_STATUS_BUFFER_TOO_SMALL;
+    } else {
+      xe::store_and_swap<uint64_t>(output_buffer, 0);
+      xe::store_and_swap<uint64_t>(output_buffer + 8, cache_size);
+      information = 0x10;
+    }
+  } else if (XSUCCEEDED(result)) {
+    XELOGD(
+        "NtDeviceIoControlFile(0x{:X}) - unhandled IOCTL handle={} path='{}' "
+        "name='{}' device='{}'",
+        uint32_t(io_control_code), uint32_t(handle),
+        file ? file->path() : std::string(), file ? file->name() : std::string(),
+        file && file->device() ? file->device()->name() : std::string());
+    result = X_STATUS_INVALID_PARAMETER;
+  }
+
+  if (io_status_block) {
+    io_status_block->status = result;
+    io_status_block->information = XSUCCEEDED(result) ? information : 0;
+  }
+
+  if (XSUCCEEDED(result) && (uint32_t(apc_routine) & ~1u) && apc_context) {
+    auto thread = XThread::GetCurrentThread();
+    thread->EnqueueApc(static_cast<uint32_t>(apc_routine) & ~1u, apc_context,
+                       io_status_block, 0);
+  }
+
+  if (XSUCCEEDED(result) && event) {
+    event->Set(0, false);
+  }
+
+  return result;
 }
-DECLARE_XBOXKRNL_EXPORT1(NtDeviceIoControlFile, kFileSystem, kStub);
+DECLARE_XBOXKRNL_EXPORT1(NtDeviceIoControlFile, kFileSystem, kImplemented);
 // device_extension_size = additional bytes of data (aligned up to 8 byte
 // granularity) that will be allocated at the tail of the resulting device
 // object. although it is allocated at the tail, it is accessed through a
@@ -759,6 +841,18 @@ void IoDeleteDevice_entry(dword_t device_ptr, const ppc_context_t& ctx) {
 }
 
 DECLARE_XBOXKRNL_EXPORT1(IoDeleteDevice, kFileSystem, kStub);
+
+dword_result_t IoDismountVolumeByFileHandle_entry(dword_t file_handle) {
+  XELOGD("IoDismountVolumeByFileHandle({:08X})", static_cast<uint32_t>(file_handle));
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XBOXKRNL_EXPORT1(IoDismountVolumeByFileHandle, kFileSystem, kImplemented);
+
+dword_result_t EtxProducerRegister_entry(dword_t producer_ptr) {
+  XELOGD("EtxProducerRegister({:08X})", static_cast<uint32_t>(producer_ptr));
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XBOXKRNL_EXPORT1(EtxProducerRegister, kFileSystem, kImplemented);
 
 }  // namespace xboxkrnl
 }  // namespace kernel

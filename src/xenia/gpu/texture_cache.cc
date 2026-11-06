@@ -642,8 +642,8 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
     }
   }
 
-  uint32_t host_width = key.GetWidth();
-  uint32_t host_height = key.GetHeight();
+  uint32_t host_width = key.GetHostWidth();
+  uint32_t host_height = key.GetHostHeight();
   if (key.scaled_resolve) {
     host_width *= draw_resolution_scale_x();
     host_height *= draw_resolution_scale_y();
@@ -948,7 +948,7 @@ bool TextureCache::LoadTextureData(Texture& texture) {
 
 void TextureCache::BindingInfoFromFetchConstant(
     const xenos::xe_gpu_texture_fetch_t& fetch, TextureKey& key_out,
-    uint8_t* swizzled_signs_out) {
+    uint8_t* swizzled_signs_out) const {
   // Reset the key and the signedness.
   key_out.MakeInvalid();
   if (swizzled_signs_out != nullptr) {
@@ -992,11 +992,13 @@ void TextureCache::BindingInfoFromFetchConstant(
   if (fetch.dimension == xenos::DataDimension::k1D) {
     bool is_invalid_1d = false;
     // TODO(Triang3l): Support long 1D textures.
-    if (width_minus_1 >= xenos::kTexture2DCubeMaxWidthHeight) {
-      XELOGE(
-          "1D texture is too wide ({}) - ignoring! Report the game to Xenia "
-          "developers",
-          width_minus_1 + 1);
+    const bool is_long_1d =
+        width_minus_1 >= xenos::kTexture2DCubeMaxWidthHeight;
+    if (is_long_1d && !SupportsLong1DTextures()) {
+      XELOGE("1D texture is too wide ({}) - ignoring", width_minus_1 + 1);
+      is_invalid_1d = true;
+    } else if (is_long_1d && mip_max_level != 0) {
+      XELOGE("Long 1D texture has mip levels - ignoring");
       is_invalid_1d = true;
     }
     assert_false(fetch.tiled);
@@ -1021,6 +1023,13 @@ void TextureCache::BindingInfoFromFetchConstant(
   }
 
   xenos::TextureFormat format = GetBaseFormat(fetch.format);
+  const FormatInfo* format_info = FormatInfo::Get(format);
+  if (fetch.dimension == xenos::DataDimension::k1D &&
+      width_minus_1 >= xenos::kTexture2DCubeMaxWidthHeight &&
+      (format_info->block_width != 1 || format_info->block_height != 1)) {
+    XELOGE("Compressed long 1D texture is unsupported - ignoring");
+    return;
+  }
 
   key_out.base_page = base_page;
   key_out.mip_page = mip_page;

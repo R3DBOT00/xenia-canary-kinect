@@ -8,11 +8,13 @@
  */
 
 #include "xenia/kernel/xboxkrnl/xboxkrnl_threading.h"
+#include <cstdlib>
 #include "xenia/base/atomic.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/platform.h"
 #include "xenia/cpu/processor.h"
 #include "xenia/kernel/util/shim_utils.h"
+#include "xenia/kernel/xam/xam_private.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_private.h"
 #include "xenia/kernel/xsemaphore.h"
 #include "xenia/kernel/xtimer.h"
@@ -600,6 +602,7 @@ DECLARE_XBOXKRNL_EXPORT2(KePulseEvent, kThreading, kImplemented,
                          kHighFrequency);
 
 dword_result_t KeResetEvent_entry(pointer_t<X_KEVENT> event_ptr) {
+  xam::WindowsNuiObserveGuestEventReset(event_ptr.guest_address());
   auto ev = XObject::GetNativeObject<XEvent>(kernel_state(), event_ptr);
   if (!ev) {
     assert_always();
@@ -638,6 +641,8 @@ dword_result_t NtCreateEvent_entry(
 
   if (handle_ptr) {
     *handle_ptr = ev->handle();
+    XELOGI("NtCreateEvent: handle_out={:08X} value={:08X}",
+           handle_ptr.guest_address(), handle_ptr.value());
   }
   return X_STATUS_SUCCESS;
 }
@@ -739,6 +744,36 @@ void KeInitializeSemaphore_entry(pointer_t<X_KSEMAPHORE> semaphore_ptr,
   }
 }
 DECLARE_XBOXKRNL_EXPORT1(KeInitializeSemaphore, kThreading, kImplemented);
+
+void KeInitializeMutant_entry(pointer_t<X_KMUTANT> mutant_ptr,
+                              dword_t initial_owner) {
+  mutant_ptr.Zero();
+  mutant_ptr->header.type = X_DISPATCHER_FLAGS::DISPATCHER_MUTANT;
+  mutant_ptr->header.signal_state = initial_owner ? 0 : 1;
+  auto mutant = XObject::GetNativeObject<XMutant>(
+      kernel_state(), mutant_ptr, X_DISPATCHER_FLAGS::DISPATCHER_MUTANT);
+  if (!mutant) {
+    assert_always();
+  }
+}
+DECLARE_XBOXKRNL_EXPORT1(KeInitializeMutant, kThreading, kImplemented);
+
+dword_result_t KeReleaseMutant_entry(pointer_t<X_KMUTANT> mutant_ptr,
+                                     dword_t increment, dword_t abandoned,
+                                     dword_t wait) {
+  auto mutant = XObject::GetNativeObject<XMutant>(kernel_state(), mutant_ptr,
+                                                  X_DISPATCHER_FLAGS::DISPATCHER_MUTANT);
+  if (!mutant) {
+    return 0;
+  }
+  const uint32_t previous_state = mutant_ptr->header.signal_state;
+  if (XSUCCEEDED(mutant->ReleaseMutant(increment, !!abandoned, !!wait))) {
+    mutant_ptr->header.signal_state = 1;
+    mutant_ptr->owner = 0;
+  }
+  return previous_state;
+}
+DECLARE_XBOXKRNL_EXPORT1(KeReleaseMutant, kThreading, kImplemented);
 
 uint32_t xeKeReleaseSemaphore(X_KSEMAPHORE* semaphore_ptr, uint32_t increment,
                               uint32_t adjustment, uint32_t wait) {
@@ -1004,8 +1039,43 @@ dword_result_t KeWaitForSingleObject_entry(lpvoid_t object_ptr,
                                            dword_t wait_reason,
                                            dword_t processor_mode,
                                            dword_t alertable,
-                                           lpqword_t timeout_ptr) {
+                                           lpqword_t timeout_ptr,
+                                           const ppc_context_t& ctx) {
   uint64_t timeout = timeout_ptr ? static_cast<uint64_t>(*timeout_ptr) : 0u;
+
+  // Diagnostic-only cap for a known reproducible hang: caller 0x9225540C
+  // waits on the orphaned event at 0x929B48AC with a relative timeout that
+  // can outlive the object's real signal, stalling the guest. Gated on the
+  // exact caller LR and object address so no other KeWaitForSingleObject
+  // call site (e.g. 0x9225E510) is ever touched, and inert unless
+  // THREESIXTY_ORPHAN_WAIT_CAP_MS is set.
+  if (timeout_ptr && uint32_t(ctx->lr) == 0x9225540Cu &&
+      object_ptr.guest_address() == 0x929B48ACu) {
+    static const uint32_t cap_ms = [] {
+      const char* env = std::getenv("THREESIXTY_ORPHAN_WAIT_CAP_MS");
+      return env ? static_cast<uint32_t>(std::strtoul(env, nullptr, 10)) : 0u;
+    }();
+    if (cap_ms) {
+      const int64_t signed_timeout = static_cast<int64_t>(timeout);
+      if (signed_timeout < 0) {
+        const uint32_t timeout_ms =
+            static_cast<uint32_t>(-signed_timeout / 10000);
+        if (timeout_ms > cap_ms) {
+          timeout = static_cast<uint64_t>(-static_cast<int64_t>(cap_ms) *
+                                          10000);
+          XELOGI(
+              "KeWaitForSingleObject: capped orphaned wait caller={:08X} "
+              "event={:08X} from {}ms to {}ms (THREESIXTY_ORPHAN_WAIT_CAP_MS)",
+              uint32_t(ctx->lr), object_ptr.guest_address(), timeout_ms,
+              cap_ms);
+        }
+      }
+    }
+  }
+
+  xam::WindowsNuiObserveGuestWait(XThread::GetCurrentThreadId(),
+                                  object_ptr.guest_address(), wait_reason,
+                                  uint32_t(ctx->lr));
   return xeKeWaitForSingleObject(object_ptr, wait_reason, processor_mode,
                                  alertable, timeout_ptr ? &timeout : nullptr);
 }
@@ -1037,10 +1107,30 @@ uint32_t NtWaitForSingleObjectEx(uint32_t object_handle, uint32_t wait_mode,
 dword_result_t NtWaitForSingleObjectEx_entry(dword_t object_handle,
                                              dword_t wait_mode,
                                              dword_t alertable,
-                                             lpqword_t timeout_ptr) {
+                                             lpqword_t timeout_ptr,
+                                             const ppc_context_t& ctx) {
+  static std::atomic<uint32_t> infinite_wait_trace_count{0};
+  uint32_t wait_trace_index = UINT32_MAX;
+  bool trace_wait = false;
+  if (!timeout_ptr && uint32_t(ctx->lr) >= 0x82000000) {
+    wait_trace_index =
+        infinite_wait_trace_count.fetch_add(1, std::memory_order_relaxed);
+    trace_wait = wait_trace_index < 256 || !(wait_trace_index & 1023);
+    if (trace_wait) {
+      XELOGI("Guest infinite wait single enter: id={} caller={:08X} handle={:08X} "
+             "mode={} alertable={} stack={:08X}",
+             wait_trace_index, uint32_t(ctx->lr), uint32_t(object_handle),
+             uint32_t(wait_mode), uint32_t(alertable), uint32_t(ctx->r[1]));
+    }
+  }
   uint64_t timeout = timeout_ptr ? static_cast<uint64_t>(*timeout_ptr) : 0u;
-  return NtWaitForSingleObjectEx(object_handle, wait_mode, alertable,
-                                 timeout_ptr ? &timeout : nullptr);
+  const uint32_t result = NtWaitForSingleObjectEx(
+      object_handle, wait_mode, alertable, timeout_ptr ? &timeout : nullptr);
+  if (trace_wait) {
+    XELOGI("Guest infinite wait single exit: id={} result={:08X}",
+           wait_trace_index, result);
+  }
+  return result;
 }
 DECLARE_XBOXKRNL_EXPORT3(NtWaitForSingleObjectEx, kThreading, kImplemented,
                          kBlocking, kHighFrequency);
@@ -1124,15 +1214,40 @@ uint32_t xeNtWaitForMultipleObjectsEx(uint32_t count, xe::be<uint32_t>* handles,
 
 dword_result_t NtWaitForMultipleObjectsEx_entry(
     dword_t count, lpdword_t handles, dword_t wait_type, dword_t wait_mode,
-    dword_t alertable, lpqword_t timeout_ptr) {
+    dword_t alertable, lpqword_t timeout_ptr, const ppc_context_t& ctx) {
+  static std::atomic<uint32_t> infinite_wait_trace_count{0};
+  uint32_t wait_trace_index = UINT32_MAX;
+  bool trace_wait = false;
+  if (!timeout_ptr && uint32_t(ctx->lr) >= 0x82000000) {
+    wait_trace_index =
+        infinite_wait_trace_count.fetch_add(1, std::memory_order_relaxed);
+    trace_wait = wait_trace_index < 256 || !(wait_trace_index & 1023);
+    if (trace_wait) {
+      const uint32_t handle_0 = count > 0 && handles ? uint32_t(handles[0]) : 0;
+      const uint32_t handle_1 = count > 1 && handles ? uint32_t(handles[1]) : 0;
+      const uint32_t handle_2 = count > 2 && handles ? uint32_t(handles[2]) : 0;
+      const uint32_t handle_3 = count > 3 && handles ? uint32_t(handles[3]) : 0;
+      XELOGI("Guest infinite wait multiple enter: id={} caller={:08X} count={} type={} "
+             "mode={} alertable={} handles=[{:08X} {:08X} {:08X} {:08X}] "
+             "stack={:08X}",
+             wait_trace_index, uint32_t(ctx->lr), uint32_t(count),
+             uint32_t(wait_type), uint32_t(wait_mode), uint32_t(alertable),
+             handle_0, handle_1, handle_2, handle_3, uint32_t(ctx->r[1]));
+    }
+  }
   uint64_t timeout = timeout_ptr ? static_cast<uint64_t>(*timeout_ptr) : 0u;
   if (!count || count > 64 ||
       (wait_type != X_KWAIT_REASON::WaitAny && wait_type)) {
     return X_STATUS_INVALID_PARAMETER;
   }
-  return xeNtWaitForMultipleObjectsEx(count, handles, wait_type, wait_mode,
-                                      alertable,
-                                      timeout_ptr ? &timeout : nullptr);
+  const uint32_t result = xeNtWaitForMultipleObjectsEx(
+      count, handles, wait_type, wait_mode, alertable,
+      timeout_ptr ? &timeout : nullptr);
+  if (trace_wait) {
+    XELOGI("Guest infinite wait multiple exit: id={} result={:08X}",
+           wait_trace_index, result);
+  }
+  return result;
 }
 DECLARE_XBOXKRNL_EXPORT3(NtWaitForMultipleObjectsEx, kThreading, kImplemented,
                          kBlocking, kHighFrequency);
@@ -1949,6 +2064,56 @@ void KeInitializeTimerEx_entry(pointer_t<X_KTIMER> timer, dword_t type,
   xeKeInitializeTimerEx(timer, type, proctype & 0xFF, context);
 }
 DECLARE_XBOXKRNL_EXPORT1(KeInitializeTimerEx, kThreading, kImplemented);
+
+dword_result_t KeSetTimerEx_entry(pointer_t<X_KTIMER> timer_ptr,
+                                  qword_t due_time, dword_t period_ms,
+                                  lpvoid_t dpc) {
+  if (!timer_ptr) {
+    return 0;
+  }
+
+  const bool was_inserted = timer_ptr->header.inserted != 0;
+  auto timer = XObject::GetNativeObject<XTimer>(kernel_state(), timer_ptr);
+  if (!timer) {
+    return 0;
+  }
+
+  timer_ptr->due_time = static_cast<uint64_t>(due_time);
+  timer_ptr->period = static_cast<uint32_t>(period_ms);
+  timer_ptr->dpc = dpc.guest_address();
+  const X_STATUS status = timer->SetTimer(
+      static_cast<int64_t>(static_cast<uint64_t>(due_time)), period_ms, 0, 0,
+      false);
+  timer_ptr->header.inserted = XSUCCEEDED(status) ? 1 : 0;
+  XELOGD("KeSetTimerEx(timer={:08X}, due={:016X}, period={}, dpc={:08X}) "
+         "-> {:08X}",
+         timer_ptr.guest_address(), static_cast<uint64_t>(due_time),
+         static_cast<uint32_t>(period_ms), dpc.guest_address(), status);
+  return was_inserted;
+}
+DECLARE_XBOXKRNL_EXPORT1(KeSetTimerEx, kThreading, kImplemented);
+
+dword_result_t KeSetTimer_entry(pointer_t<X_KTIMER> timer_ptr,
+                                qword_t due_time, lpvoid_t dpc) {
+  return KeSetTimerEx_entry(timer_ptr, due_time, 0, dpc);
+}
+DECLARE_XBOXKRNL_EXPORT1(KeSetTimer, kThreading, kImplemented);
+
+dword_result_t KeCancelTimer_entry(pointer_t<X_KTIMER> timer_ptr) {
+  if (!timer_ptr) {
+    return 0;
+  }
+
+  const bool was_inserted = timer_ptr->header.inserted != 0;
+  auto timer = XObject::GetNativeObject<XTimer>(kernel_state(), timer_ptr);
+  if (!timer) {
+    return 0;
+  }
+  timer->Cancel();
+  timer_ptr->header.inserted = 0;
+  return was_inserted;
+}
+DECLARE_XBOXKRNL_EXPORT1(KeCancelTimer, kThreading, kImplemented);
 
 }  // namespace xboxkrnl
 }  // namespace kernel

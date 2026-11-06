@@ -10,13 +10,24 @@
 #include "xenia/app/profile_dialogs.h"
 #include "xenia/base/png_utils.h"
 #include "xenia/base/system.h"
+#include "xenia/base/cvar.h"
 #include "xenia/kernel/util/shim_utils.h"
+#include "xenia/kernel/xam/xam_private.h"
 #include "xenia/kernel/xam/xam_ui.h"
 #include "xenia/ui/file_picker.h"
 
 #include "xenia/app/console_settings_dialog.h"
 
 #include "third_party/fmt/include/fmt/format.h"
+
+#include <algorithm>
+#include <cmath>
+
+DECLARE_bool(kinect_software_near_mode);
+DECLARE_int32(kinect_software_near_offset_mm);
+DECLARE_bool(kinect_seated_tracking);
+DECLARE_int32(kinect_pscam_depth_format);
+DECLARE_int32(kinect_pscam_depth_byte_order);
 
 namespace xe {
 namespace app {
@@ -243,6 +254,59 @@ void GroupBox(const char* label, auto draw_fn) {
   ImGui::SetCursorPosY(rect_max.y + style.ItemSpacing.y);
 }
 
+void DrawKinectDepthPreview() {
+  std::vector<uint8_t> depth;
+  uint64_t timestamp = 0;
+  uint32_t frame_number = 0;
+  const bool has_frame =
+      kernel::xam::WindowsNuiCopyLatestNativeDepthFrame(
+          &depth, &timestamp, &frame_number) &&
+      depth.size() >= 320u * 240u * 2u;
+
+  ImGui::BeginChild("##KinectDepthPreview", ImVec2(332.0f, 252.0f), true);
+  const ImVec2 origin = ImGui::GetCursorScreenPos();
+  constexpr int kPreviewWidth = 320;
+  constexpr int kPreviewHeight = 240;
+  if (has_frame) {
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    constexpr int kCellWidth = 4;
+    constexpr int kCellHeight = 4;
+    for (int y = 0; y < kPreviewHeight / kCellHeight; ++y) {
+      for (int x = 0; x < kPreviewWidth / kCellWidth; ++x) {
+        const int source_x = x * kCellWidth;
+        const int source_y = y * kCellHeight;
+        const size_t offset =
+            (static_cast<size_t>(source_y) * 320u + source_x) * 2u;
+        const uint16_t value = (static_cast<uint16_t>(depth[offset]) << 8) |
+                               static_cast<uint16_t>(depth[offset + 1]);
+        // PsCam stores depth/disparity in bits 3..15 and the player index in
+        // bits 0..2. Visualizing the complete word makes every valid sample
+        // look out of range and produces a black preview.
+        const uint16_t depth_sample = value >> 3;
+        const float normalized =
+            depth_sample < 300 || depth_sample > 4000
+                ? 0.0f
+                : 1.0f - static_cast<float>(depth_sample - 300) / 3700.0f;
+        const int intensity = static_cast<int>(std::clamp(
+            normalized * 255.0f, 0.0f, 255.0f));
+        const ImU32 color = IM_COL32(intensity, intensity, intensity, 255);
+        const ImVec2 min(origin.x + x * kCellWidth,
+                         origin.y + y * kCellHeight);
+        draw_list->AddRectFilled(
+            min, ImVec2(min.x + kCellWidth, min.y + kCellHeight), color);
+      }
+    }
+    ImGui::Dummy(ImVec2(kPreviewWidth, kPreviewHeight));
+    ImGui::Text("Frame %u  Timestamp %llu", frame_number,
+                static_cast<unsigned long long>(timestamp));
+  } else {
+    ImGui::Dummy(ImVec2(kPreviewWidth, kPreviewHeight));
+    ImGui::SetCursorPos(ImVec2(12.0f, 112.0f));
+    ImGui::TextUnformatted("Waiting for depth / IR frame...");
+  }
+  ImGui::EndChild();
+}
+
 void ConsoleSettingsDialog::OnDraw(ImGuiIO& io) {
   ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowSize(ImVec2(20, 20), ImGuiCond_FirstUseEver);
@@ -386,6 +450,59 @@ void ConsoleSettingsDialog::OnDraw(ImGuiIO& io) {
         }
       });
       ImGui::EndDisabled();
+      ImGui::EndTabItem();
+    }
+
+    if (ImGui::BeginTabItem("Kinect")) {
+      ImGui::Dummy(ImVec2(2.f, 2.f));
+
+      GroupBox("Kinect Settings", [&]() {
+        const bool connected = kernel::xam::IsWindowsNuiBackendReady();
+        ImGui::Text("Sensor: %s", connected ? "Connected" : "Searching");
+        ImGui::Text("Tracked bodies: %u", kernel::xam::WindowsNuiTrackedCount());
+        ImGui::Text("Color frames: %llu",
+                    static_cast<unsigned long long>(
+                        kernel::xam::WindowsNuiColorFrameCount()));
+        ImGui::Text("Depth frames: %llu",
+                    static_cast<unsigned long long>(
+                        kernel::xam::WindowsNuiDepthFrameCount()));
+        ImGui::Text("Skeleton frames: %llu",
+                    static_cast<unsigned long long>(
+                        kernel::xam::WindowsNuiSkeletonFrameCount()));
+
+        int elevation = 0;
+        if (kernel::xam::WindowsNuiGetElevationAngle(&elevation)) {
+          if (ImGui::SliderInt("Camera tilt", &elevation, -27, 27,
+                               "%d degrees")) {
+            kernel::xam::WindowsNuiSetElevationAngle(elevation);
+          }
+          if (ImGui::Button("Center camera")) {
+            kernel::xam::WindowsNuiSetElevationAngle(0);
+          }
+        } else {
+          ImGui::TextUnformatted("Camera tilt unavailable");
+        }
+      });
+
+      GroupBox("Tracking", [&]() {
+        ImGui::Checkbox("Seated tracking", &cvars::kinect_seated_tracking);
+        ImGui::Checkbox("Software near mode",
+                        &cvars::kinect_software_near_mode);
+        ImGui::SliderInt("Near offset (mm)",
+                         &cvars::kinect_software_near_offset_mm, 0, 1000);
+      });
+
+      GroupBox("Depth / IR Preview", [&]() { DrawKinectDepthPreview(); });
+
+      GroupBox("Guest Format", [&]() {
+        const char* formats[] = {"Calibrated raw disparity", "Millimeters"};
+        ImGui::Combo("Depth format", &cvars::kinect_pscam_depth_format,
+                     formats, IM_ARRAYSIZE(formats));
+        const char* byte_orders[] = {"Xbox big-endian", "Sensor little-endian"};
+        ImGui::Combo("Byte order", &cvars::kinect_pscam_depth_byte_order,
+                     byte_orders, IM_ARRAYSIZE(byte_orders));
+      });
+
       ImGui::EndTabItem();
     }
 

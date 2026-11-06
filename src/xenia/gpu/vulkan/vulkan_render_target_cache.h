@@ -126,7 +126,10 @@ class VulkanRenderTargetCache final : public RenderTargetCache {
                VulkanTextureCache& texture_cache, uint32_t& written_address_out,
                uint32_t& written_length_out,
                reg::RB_COPY_DEST_INFO* copy_dest_info_out = nullptr,
-               bool* written_scaled_out = nullptr);
+               bool* written_scaled_out = nullptr,
+               xenos::PrimitiveType primitive_type =
+                   xenos::PrimitiveType::kRectangleList,
+               uint32_t vertex_count = 3, bool indexed = false);
 
   bool Update(bool is_rasterization_done,
               reg::RB_DEPTHCONTROL normalized_depth_control,

@@ -21,6 +21,17 @@ DECLARE_bool(trace_functions);
 DECLARE_bool(trace_function_coverage);
 DECLARE_bool(trace_function_references);
 DECLARE_bool(trace_function_data);
+DECLARE_string(trace_guest_functions);
+
+namespace xe {
+namespace cpu {
+
+using GuestFunctionEntryHook = bool (*)(void* raw_context, uint32_t address);
+void SetGuestFunctionEntryHook(GuestFunctionEntryHook hook);
+bool InvokeGuestFunctionEntryHook(void* raw_context, uint32_t address);
+
+}  // namespace cpu
+}  // namespace xe
 
 DECLARE_bool(validate_hir);
 

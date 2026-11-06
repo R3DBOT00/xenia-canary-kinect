@@ -18,6 +18,10 @@
 #include <string_view>
 #include <type_traits>
 
+#if XE_PLATFORM_WIN32
+#include <malloc.h>
+#endif
+
 #include "xenia/base/byte_order.h"
 
 namespace xe {
@@ -116,7 +120,7 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out);
 // The memory must be freed with AlignedFree.
 template <typename T>
 inline T* AlignedAlloc(size_t alignment) {
-#if XE_COMPILER_MSVC
+#if XE_PLATFORM_WIN32
   return reinterpret_cast<T*>(_aligned_malloc(sizeof(T), alignment));
 #else
   void* ptr = nullptr;
@@ -130,7 +134,7 @@ inline T* AlignedAlloc(size_t alignment) {
 // Frees memory previously allocated with AlignedAlloc.
 template <typename T>
 void AlignedFree(T* ptr) {
-#if XE_COMPILER_MSVC
+#if XE_PLATFORM_WIN32
   _aligned_free(ptr);
 #else
   free(ptr);
@@ -724,10 +728,14 @@ static void ReadLineNT(CacheLine* XE_RESTRICT destination,
                        const CacheLine* XE_RESTRICT source) {
   assert_true((reinterpret_cast<uintptr_t>(source) & 63ULL) == 0);
 
-  __m128i first = _mm_stream_load_si128(&source->xmms[0]);
-  __m128i second = _mm_stream_load_si128(&source->xmms[1]);
-  __m128i third = _mm_stream_load_si128(&source->xmms[2]);
-  __m128i fourth = _mm_stream_load_si128(&source->xmms[3]);
+  __m128i first = _mm_stream_load_si128(
+      const_cast<__m128i*>(&source->xmms[0]));
+  __m128i second = _mm_stream_load_si128(
+      const_cast<__m128i*>(&source->xmms[1]));
+  __m128i third = _mm_stream_load_si128(
+      const_cast<__m128i*>(&source->xmms[2]));
+  __m128i fourth = _mm_stream_load_si128(
+      const_cast<__m128i*>(&source->xmms[3]));
 
   destination->xmms[0] = first;
   destination->xmms[1] = second;

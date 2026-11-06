@@ -286,6 +286,8 @@ class VulkanCommandProcessor final : public CommandProcessor {
                  IndexBufferInfo* index_buffer_info,
                  bool major_mode_explicit) override;
   bool IssueCopy() override;
+  bool IssueCopyForDraw(xenos::PrimitiveType primitive_type,
+                        uint32_t vertex_count, bool indexed);
 
   void InitializeTrace() override;
 

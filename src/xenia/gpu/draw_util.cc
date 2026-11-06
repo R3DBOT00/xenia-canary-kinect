@@ -951,7 +951,9 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
                     uint32_t draw_resolution_scale_y,
                     bool fixed_rg16_truncated_to_minus_1_to_1,
                     bool fixed_rgba16_truncated_to_minus_1_to_1,
-                    ResolveInfo& info_out) {
+                    ResolveInfo& info_out,
+                    xenos::PrimitiveType primitive_type, uint32_t vertex_count,
+                    bool indexed) {
   // Don't pass uninitialized values to shaders, not to leak data to frame
   // captures. Also initialize an invalid resolve to empty.
   info_out.coordinate_info.packed = 0;
@@ -961,7 +963,8 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
   info_out.rb_copy_control = rb_copy_control;
 
   if (rb_copy_control.copy_command != xenos::CopyCommand::kRaw &&
-      rb_copy_control.copy_command != xenos::CopyCommand::kConvert) {
+      rb_copy_control.copy_command != xenos::CopyCommand::kConvert &&
+      rb_copy_control.copy_command != xenos::CopyCommand::kConstantOne) {
     XELOGE(
         "Unsupported resolve copy command {}. Report the game to Xenia "
         "developers",
@@ -970,48 +973,72 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
     return false;
   }
 
-  // Get the extent of pixels covered by the resolve rectangle, according to the
-  // top-left rasterization rule.
-  // D3D9 HACK: Vertices to use are always in vf0, and are written by the CPU.
-  xenos::xe_gpu_vertex_fetch_t fetch = regs.GetVertexFetch(0);
-  if (fetch.type != xenos::FetchConstantType::kVertex || fetch.size != 3 * 2) {
-    XELOGE("Unsupported resolve vertex buffer format");
+  // Get the extent of pixels covered by the resolve rectangles, according to
+  // the top-left rasterization rule. D3D9 normally emits one rectangle (three
+  // vertices), while Kinect titles also batch a grid of rectangle primitives.
+  if (primitive_type != xenos::PrimitiveType::kRectangleList || indexed ||
+      vertex_count < 3 || vertex_count % 3) {
+    XELOGE(
+        "Unsupported resolve geometry: primitive={}, vertices={}, indexed={}",
+        uint32_t(primitive_type), vertex_count, indexed);
     assert_always();
     return false;
   }
-  trace_writer.WriteMemoryRead(fetch.address * sizeof(uint32_t),
-                               fetch.size * sizeof(uint32_t));
-  const float* vertices_guest = reinterpret_cast<const float*>(
-      memory.TranslatePhysical(fetch.address * sizeof(uint32_t)));
-  // Most vertices have a negative half-pixel offset applied, which we reverse.
-  float half_pixel_offset =
-      regs.Get<reg::PA_SU_VTX_CNTL>().pix_center == xenos::PixelCenter::kD3DZero
-          ? 0.5f
-          : 0.0f;
-  int32_t vertices_fixed[6];
-  float vertices_swapped[6];
-  for (size_t i = 0; i < xe::countof(vertices_fixed); ++i) {
-    vertices_swapped[i] = xenos::GpuSwap(vertices_guest[i], fetch.endian);
-    vertices_fixed[i] =
-        ui::FloatToD3D11Fixed16p8(vertices_swapped[i] + half_pixel_offset);
+  // D3D9 HACK: Vertices to use are always in vf0, and are written by the CPU.
+  xenos::xe_gpu_vertex_fetch_t fetch = regs.GetVertexFetch(0);
+  uint32_t vertex_word_count = vertex_count * 2;
+  bool use_scissor_geometry =
+      fetch.type != xenos::FetchConstantType::kVertex;
+  if (!use_scissor_geometry && fetch.size < vertex_word_count) {
+    XELOGE(
+        "Unsupported resolve vertex buffer format: type={}, size={}, "
+        "required={}, address={:08X}, endian={}, dwords={:08X}/{:08X}",
+        uint32_t(fetch.type), fetch.size, vertex_word_count,
+        fetch.address * sizeof(uint32_t), uint32_t(fetch.endian), fetch.dword_0,
+        fetch.dword_1);
+    assert_always();
+    return false;
   }
-
-  // Inclusive.
-  int32_t x0 = std::min(std::min(vertices_fixed[0], vertices_fixed[2]),
-                        vertices_fixed[4]);
-  int32_t y0 = std::min(std::min(vertices_fixed[1], vertices_fixed[3]),
-                        vertices_fixed[5]);
-  // Exclusive.
-  int32_t x1 = std::max(std::max(vertices_fixed[0], vertices_fixed[2]),
-                        vertices_fixed[4]);
-  int32_t y1 = std::max(std::max(vertices_fixed[1], vertices_fixed[3]),
-                        vertices_fixed[5]);
-  // Top-left - include .5 (0.128 treated as 0 covered, 0.129 as 0 not covered).
-  x0 = (x0 + 127) >> 8;
-  y0 = (y0 + 127) >> 8;
-  // Bottom-right - exclude .5.
-  x1 = (x1 + 127) >> 8;
-  y1 = (y1 + 127) >> 8;
+  int32_t x0 = 0;
+  int32_t y0 = 0;
+  int32_t x1 = 0;
+  int32_t y1 = 0;
+  if (!use_scissor_geometry) {
+    trace_writer.WriteMemoryRead(fetch.address * sizeof(uint32_t),
+                                 vertex_word_count * sizeof(uint32_t));
+    const float* vertices_guest = reinterpret_cast<const float*>(
+        memory.TranslatePhysical(fetch.address * sizeof(uint32_t)));
+    // Most vertices have a negative half-pixel offset applied, which we reverse.
+    float half_pixel_offset =
+        regs.Get<reg::PA_SU_VTX_CNTL>().pix_center ==
+                xenos::PixelCenter::kD3DZero
+            ? 0.5f
+            : 0.0f;
+    float first_x = xenos::GpuSwap(vertices_guest[0], fetch.endian);
+    float first_y = xenos::GpuSwap(vertices_guest[1], fetch.endian);
+    x0 = ui::FloatToD3D11Fixed16p8(first_x + half_pixel_offset);
+    y0 = ui::FloatToD3D11Fixed16p8(first_y + half_pixel_offset);
+    x1 = x0;
+    y1 = y0;
+    for (uint32_t i = 1; i < vertex_count; ++i) {
+      float vertex_x = xenos::GpuSwap(vertices_guest[i * 2], fetch.endian);
+      float vertex_y = xenos::GpuSwap(vertices_guest[i * 2 + 1], fetch.endian);
+      int32_t vertex_x_fixed =
+          ui::FloatToD3D11Fixed16p8(vertex_x + half_pixel_offset);
+      int32_t vertex_y_fixed =
+          ui::FloatToD3D11Fixed16p8(vertex_y + half_pixel_offset);
+      x0 = std::min(x0, vertex_x_fixed);
+      y0 = std::min(y0, vertex_y_fixed);
+      x1 = std::max(x1, vertex_x_fixed);
+      y1 = std::max(y1, vertex_y_fixed);
+    }
+    // Top-left - include .5 (0.128 treated as 0 covered, 0.129 as 0 not covered).
+    x0 = (x0 + 127) >> 8;
+    y0 = (y0 + 127) >> 8;
+    // Bottom-right - exclude .5.
+    x1 = (x1 + 127) >> 8;
+    y1 = (y1 + 127) >> 8;
+  }
 
   auto pa_sc_window_offset = regs.Get<reg::PA_SC_WINDOW_OFFSET>();
 
@@ -1031,10 +1058,17 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
   GetScissor(regs, scissor, false);
   int32_t scissor_right = int32_t(scissor.offset[0] + scissor.extent[0]);
   int32_t scissor_bottom = int32_t(scissor.offset[1] + scissor.extent[1]);
-  x0 = std::clamp(x0, int32_t(scissor.offset[0]), scissor_right);
-  y0 = std::clamp(y0, int32_t(scissor.offset[1]), scissor_bottom);
-  x1 = std::clamp(x1, int32_t(scissor.offset[0]), scissor_right);
-  y1 = std::clamp(y1, int32_t(scissor.offset[1]), scissor_bottom);
+  if (use_scissor_geometry) {
+    x0 = int32_t(scissor.offset[0]);
+    y0 = int32_t(scissor.offset[1]);
+    x1 = scissor_right;
+    y1 = scissor_bottom;
+  } else {
+    x0 = std::clamp(x0, int32_t(scissor.offset[0]), scissor_right);
+    y0 = std::clamp(y0, int32_t(scissor.offset[1]), scissor_bottom);
+    x1 = std::clamp(x1, int32_t(scissor.offset[0]), scissor_right);
+    y1 = std::clamp(y1, int32_t(scissor.offset[1]), scissor_bottom);
+  }
 
   assert_true(x0 <= x1 && y0 <= y1);
 
@@ -1118,6 +1152,8 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
         static_cast<uint32_t>(sample_select));
   }
   info_out.copy_dest_coordinate_info.copy_sample_select = sample_select;
+  info_out.copy_dest_coordinate_info.copy_command_constant_one =
+      rb_copy_control.copy_command == xenos::CopyCommand::kConstantOne;
   // Get the format to pass to the shader in a unified way - for depth (for
   // which Direct3D 9 specifies the k_8_8_8_8 uint destination format), make
   // sure the shader won't try to do conversion - pass proper k_24_8 or
@@ -1167,8 +1203,39 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
   info_out.copy_dest_coordinate_info.height_aligned_div_32 =
       copy_dest_height_aligned >> 5;
   const FormatInfo& dest_format_info = *FormatInfo::Get(dest_format);
-  if (is_depth || dest_format_info.type == FormatType::kResolvable) {
-    uint32_t bpp_log2 = xe::log2_floor(dest_format_info.bits_per_pixel >> 3);
+  bool compressed_constant_one =
+      rb_copy_control.copy_command == xenos::CopyCommand::kConstantOne &&
+      dest_format == xenos::TextureFormat::k_DXT3A_AS_1_1_1_1;
+  info_out.coordinate_info.copy_dest_is_compressed = compressed_constant_one;
+  if (is_depth || dest_format_info.type == FormatType::kResolvable ||
+      compressed_constant_one) {
+    uint32_t dest_x0 = uint32_t(x0);
+    uint32_t dest_y0 = uint32_t(y0);
+    uint32_t dest_x1 = uint32_t(x1);
+    uint32_t dest_y1 = uint32_t(y1);
+    uint32_t copy_dest_pitch_addressing = copy_dest_pitch_aligned;
+    uint32_t copy_dest_height_addressing = copy_dest_height_aligned;
+    uint32_t bytes_per_block = dest_format_info.bits_per_pixel >> 3;
+    if (compressed_constant_one) {
+      dest_x0 /= dest_format_info.block_width;
+      dest_y0 /= dest_format_info.block_height;
+      dest_x1 = xe::align(dest_x1, dest_format_info.block_width) /
+                dest_format_info.block_width;
+      dest_y1 = xe::align(dest_y1, dest_format_info.block_height) /
+                dest_format_info.block_height;
+      copy_dest_pitch_addressing = xe::align(
+          copy_dest_pitch_aligned / dest_format_info.block_width,
+          texture_address::kStoragePitchHeightAlignmentBlocks);
+      copy_dest_height_addressing = xe::align(
+          copy_dest_height_aligned / dest_format_info.block_height,
+          texture_address::kStoragePitchHeightAlignmentBlocks);
+      bytes_per_block = dest_format_info.bytes_per_block();
+      info_out.copy_dest_coordinate_info.pitch_aligned_div_32 =
+          copy_dest_pitch_addressing >> 5;
+      info_out.copy_dest_coordinate_info.height_aligned_div_32 =
+          copy_dest_height_addressing >> 5;
+    }
+    uint32_t bpp_log2 = xe::log2_floor(bytes_per_block);
     uint32_t dest_base_relative_x_mask =
         (UINT32_C(1) << xenos::GetTextureTiledXBaseGranularityLog2(
              bool(rb_copy_dest_info.copy_dest_array), bpp_log2)) -
@@ -1177,42 +1244,65 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
         (UINT32_C(1) << xenos::GetTextureTiledYBaseGranularityLog2(
              bool(rb_copy_dest_info.copy_dest_array), bpp_log2)) -
         1;
-    info_out.copy_dest_coordinate_info.offset_x_div_8 =
-        (uint32_t(x0) & dest_base_relative_x_mask) >>
-        xenos::kResolveAlignmentPixelsLog2;
-    info_out.copy_dest_coordinate_info.offset_y_div_8 =
-        (uint32_t(y0) & dest_base_relative_y_mask) >>
-        xenos::kResolveAlignmentPixelsLog2;
-    uint32_t dest_base_x = uint32_t(x0) & ~dest_base_relative_x_mask;
-    uint32_t dest_base_y = uint32_t(y0) & ~dest_base_relative_y_mask;
+    uint32_t dest_base_relative_x = dest_x0 & dest_base_relative_x_mask;
+    uint32_t dest_base_relative_y = dest_y0 & dest_base_relative_y_mask;
+    // Resolve rectangles are 8-texel aligned, so DXT block coordinates are
+    // even. Store compressed offsets in pairs of blocks to retain the range of
+    // the existing four-bit destination offset fields.
+    uint32_t dest_coordinate_unit_log2 = compressed_constant_one ? 1 : 3;
+    if ((dest_base_relative_x | dest_base_relative_y) &
+        ((UINT32_C(1) << dest_coordinate_unit_log2) - 1)) {
+      XELOGE("Resolve destination offset is not aligned to its coordinate unit: "
+             "{},{} (unit log2 {})",
+             dest_base_relative_x, dest_base_relative_y,
+             dest_coordinate_unit_log2);
+      return false;
+    }
+    uint32_t dest_offset_x =
+        dest_base_relative_x >> dest_coordinate_unit_log2;
+    uint32_t dest_offset_y =
+        dest_base_relative_y >> dest_coordinate_unit_log2;
+    info_out.copy_dest_coordinate_info.offset_x_div_8 = dest_offset_x;
+    info_out.copy_dest_coordinate_info.offset_y_div_8 = dest_offset_y;
+    uint32_t dest_base_x = dest_x0 & ~dest_base_relative_x_mask;
+    uint32_t dest_base_y = dest_y0 & ~dest_base_relative_y_mask;
+    if (compressed_constant_one &&
+        (info_out.copy_dest_coordinate_info.offset_x_div_8 != dest_offset_x ||
+         info_out.copy_dest_coordinate_info.offset_y_div_8 != dest_offset_y)) {
+      XELOGE("Compressed constant-one resolve offset is too large: {},{}",
+             dest_offset_x, dest_offset_y);
+      return false;
+    }
     if (rb_copy_dest_info.copy_dest_array) {
       // The base pointer is already adjusted to the Z / 8 (copy_dest_slice is
       // 3-bit).
       copy_dest_base_adjusted += uint32_t(texture_address::Tiled3D(
           int32_t(dest_base_x), int32_t(dest_base_y), 0,
-          copy_dest_pitch_aligned, copy_dest_height_aligned, bpp_log2));
+          copy_dest_pitch_addressing, copy_dest_height_addressing, bpp_log2));
       copy_dest_extent_start =
           rb_copy_dest_base +
           uint32_t(texture_util::GetTiledAddressLowerBound3D(
-              uint32_t(x0), uint32_t(y0), rb_copy_dest_info.copy_dest_slice,
-              copy_dest_pitch_aligned, copy_dest_height_aligned, bpp_log2));
+              dest_x0, dest_y0, rb_copy_dest_info.copy_dest_slice,
+              copy_dest_pitch_addressing, copy_dest_height_addressing,
+              bpp_log2));
       copy_dest_extent_end =
           rb_copy_dest_base +
           uint32_t(texture_util::GetTiledAddressUpperBound3D(
-              uint32_t(x1), uint32_t(y1), rb_copy_dest_info.copy_dest_slice + 1,
-              copy_dest_pitch_aligned, copy_dest_height_aligned, bpp_log2));
+              dest_x1, dest_y1, rb_copy_dest_info.copy_dest_slice + 1,
+              copy_dest_pitch_addressing, copy_dest_height_addressing,
+              bpp_log2));
     } else {
       copy_dest_base_adjusted +=
           texture_address::Tiled2D(int32_t(dest_base_x), int32_t(dest_base_y),
-                                   copy_dest_pitch_aligned, bpp_log2);
+                                   copy_dest_pitch_addressing, bpp_log2);
       copy_dest_extent_start =
           rb_copy_dest_base +
           texture_util::GetTiledAddressLowerBound2D(
-              uint32_t(x0), uint32_t(y0), copy_dest_pitch_aligned, bpp_log2);
+              dest_x0, dest_y0, copy_dest_pitch_addressing, bpp_log2);
       copy_dest_extent_end =
           rb_copy_dest_base +
           texture_util::GetTiledAddressUpperBound2D(
-              uint32_t(x1), uint32_t(y1), copy_dest_pitch_aligned, bpp_log2);
+              dest_x1, dest_y1, copy_dest_pitch_addressing, bpp_log2);
     }
   } else {
     XELOGE("Tried to resolve to format {}, which is not a ColorFormat",
@@ -1373,7 +1463,10 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(
   bool source_is_64bpp = !is_depth && color_edram_info.format_is_64bpp != 0;
   // Fast color resolve is a raw copy. If copy_dest_number asks for a different
   // fixed interpretation, full resolve has to do the repack.
-  if (is_depth || (!copy_dest_info.copy_dest_exp_bias &&
+  if (coordinate_info.copy_dest_is_compressed) {
+    shader = ResolveCopyShaderIndex::kFull64bpp;
+  } else if (rb_copy_control.copy_command != xenos::CopyCommand::kConstantOne &&
+      (is_depth || (!copy_dest_info.copy_dest_exp_bias &&
                    xenos::IsSingleCopySampleSelected(
                        copy_dest_coordinate_info.copy_sample_select) &&
                    xenos::IsColorResolveFormatBitwiseEquivalent(
@@ -1382,7 +1475,7 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(
                    (!cvars::resolve_check_number_format ||
                     ColorResolveNumberFormatMatches(
                         xenos::ColorFormat(copy_dest_info.copy_dest_format),
-                        copy_dest_info.copy_dest_number)))) {
+                        copy_dest_info.copy_dest_number))))) {
     if (edram_info.msaa_samples >= xenos::MsaaSamples::k4X) {
       shader = source_is_64bpp ? ResolveCopyShaderIndex::kFast64bpp4xMSAA
                                : ResolveCopyShaderIndex::kFast32bpp4xMSAA;
@@ -1421,11 +1514,20 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(
   constants_out.dest_base = copy_dest_base;
 
   if (shader != ResolveCopyShaderIndex::kUnknown) {
-    uint32_t width =
-        (coordinate_info.width_div_8 << xenos::kResolveAlignmentPixelsLog2) *
-        draw_resolution_scale_x;
-    uint32_t height = (height_div_8 << xenos::kResolveAlignmentPixelsLog2) *
-                      draw_resolution_scale_y;
+    uint32_t width = coordinate_info.width_div_8;
+    uint32_t height = height_div_8;
+    if (coordinate_info.copy_dest_is_compressed) {
+      // Full 64bpp normally handles four pixels per invocation. The compressed
+      // path handles two 64-bit DXT blocks, so compensate for that difference
+      // in the dispatch width. One 8-texel resolve unit is two 4x4 blocks.
+      width <<= 2;
+      height <<= 1;
+    } else {
+      width <<= xenos::kResolveAlignmentPixelsLog2;
+      height <<= xenos::kResolveAlignmentPixelsLog2;
+    }
+    width *= draw_resolution_scale_x;
+    height *= draw_resolution_scale_y;
     const ResolveCopyShaderInfo& shader_info =
         resolve_copy_shader_info[size_t(shader)];
     group_count_x_out = (width + ((1 << shader_info.group_size_x_log2) - 1)) >>
@@ -1449,7 +1551,9 @@ uint32_t GetResolveDownscalePixelSizeLog2(
   // the destination extent calculation there.
   const FormatInfo& dest_format_info = *FormatInfo::Get(
       xenos::TextureFormat(uint32_t(copy_dest_info.copy_dest_format)));
-  return xe::log2_floor(dest_format_info.bits_per_pixel >> 3);
+  return xe::log2_floor(dest_format_info.type == FormatType::kCompressed
+                            ? dest_format_info.bytes_per_block()
+                            : (dest_format_info.bits_per_pixel >> 3));
 }
 
 }  // namespace draw_util

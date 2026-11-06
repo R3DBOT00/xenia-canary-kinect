@@ -20,6 +20,8 @@ namespace kernel {
 // IOCTL_, used by NtDeviceIoControlFile
 constexpr uint32_t X_IOCTL_DISK_GET_DRIVE_GEOMETRY = 0x70000;
 constexpr uint32_t X_IOCTL_DISK_GET_PARTITION_INFO = 0x74004;
+// Image-device query issued while validating an opened XEX image.
+constexpr uint32_t X_IOCTL_IMAGE_GET_INFO = 0x24400;
 
 // MEM_*, used by NtAllocateVirtualMemory
 enum X_MEM : uint32_t {

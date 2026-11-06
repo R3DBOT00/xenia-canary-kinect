@@ -34,6 +34,8 @@
 #include "third_party/fmt/include/fmt/format.h"
 #include "third_party/fmt/include/fmt/xchar.h"
 
+#include <atomic>
+
 DEFINE_int32(avpack, 8,
              "Video modes\n"
              " 0 = PAL-60 Component (SD)\n"
@@ -56,6 +58,40 @@ namespace xam {
 
 // https://github.com/tpn/winsdk-10/blob/master/Include/10.0.14393.0/km/wdm.h#L15539
 typedef enum _MODE { KernelMode, UserMode, MaximumMode } MODE;
+
+enum class XBackgroundDownloadMode : uint32_t {
+  kAlwaysAllow = 1,
+  kAuto = 2,
+};
+
+std::atomic<uint32_t> background_download_mode{
+    uint32_t(XBackgroundDownloadMode::kAuto)};
+
+dword_result_t XamBackgroundDownloadSetMode_entry(dword_t mode) {
+  const uint32_t mode_value = mode;
+  if (mode_value != uint32_t(XBackgroundDownloadMode::kAlwaysAllow) &&
+      mode_value != uint32_t(XBackgroundDownloadMode::kAuto)) {
+    XELOGW("XamBackgroundDownloadSetMode: invalid mode {}", mode_value);
+    return X_ERROR_INVALID_PARAMETER;
+  }
+  background_download_mode.store(mode_value, std::memory_order_relaxed);
+  XELOGI("XamBackgroundDownloadSetMode: mode={}", mode_value);
+  return X_ERROR_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(XamBackgroundDownloadSetMode, kNone, kImplemented);
+
+dword_result_t XamBackgroundDownloadGetMode_entry() {
+  return background_download_mode.load(std::memory_order_relaxed);
+}
+DECLARE_XAM_EXPORT1(XamBackgroundDownloadGetMode, kNone, kImplemented);
+
+dword_result_t XamBackgroundDownloadIsEnabled_entry() {
+  const uint32_t mode =
+      background_download_mode.load(std::memory_order_relaxed);
+  return mode == uint32_t(XBackgroundDownloadMode::kAlwaysAllow) ||
+         mode == uint32_t(XBackgroundDownloadMode::kAuto);
+}
+DECLARE_XAM_EXPORT1(XamBackgroundDownloadIsEnabled, kNone, kImplemented);
 
 dword_result_t XamFeatureEnabled_entry(qword_t feature_bit) {
   const std::bitset<36> feature(0x40ffffffff);
@@ -332,7 +368,7 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
             config::SaveConfig();
             xe::FlushLog();
 
-            std::quick_exit(0);
+            std::exit(0);
           }).detach();
         });
   }
@@ -364,7 +400,7 @@ void XamLoaderTerminateTitle_entry() {
             config::SaveConfig();
             xe::FlushLog();
 
-            std::quick_exit(0);
+            std::exit(0);
           }).detach();
         });
   }

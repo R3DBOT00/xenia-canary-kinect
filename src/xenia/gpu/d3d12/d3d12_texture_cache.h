@@ -548,6 +548,7 @@ class D3D12TextureCache final : public TextureCache {
       xenos::DataDimension dimension) const override;
   uint32_t GetMaxHostTextureDepthOrArraySize(
       xenos::DataDimension dimension) const override;
+  bool SupportsLong1DTextures() const override { return true; }
 
   std::unique_ptr<Texture> CreateTexture(TextureKey key) override;
 

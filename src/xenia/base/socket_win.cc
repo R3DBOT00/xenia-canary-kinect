@@ -14,10 +14,11 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/platform_win.h"
 
-// winsock includes must come after platform_win.h:
-#include <mstcpip.h>   // NOLINT(build/include_order)
+// winsock includes must come after platform_win.h, but winsock2 has to come
+// before mstcpip.h so MinGW sees the socket typedefs.
 #include <winsock2.h>  // NOLINT(build/include_order)
 #include <ws2tcpip.h>  // NOLINT(build/include_order)
+#include <mstcpip.h>   // NOLINT(build/include_order)
 
 namespace xe {
 

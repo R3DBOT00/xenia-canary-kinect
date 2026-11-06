@@ -19,6 +19,10 @@
 #include "xenia/kernel/xconfig.h"
 #include "xenia/xbox.h"
 
+#include "third_party/fmt/include/fmt/format.h"
+
+#include <atomic>
+
 DEFINE_bool(interlaced, false, "Toggles interlaced mode.", "Video");
 // BT.709 on modern monitors and TVs looks the closest to the Xbox 360 connected
 // to an HDTV.
@@ -471,7 +475,7 @@ void VdSwap_entry(
     lpunknown_t unk4,           // from VdGetSystemCommandBuffer (0xBEEF0001)
     lpdword_t frontbuffer_ptr,  // ptr to frontbuffer address
     lpdword_t texture_format_ptr, lpdword_t color_space_ptr, lpdword_t width,
-    lpdword_t height) {
+    lpdword_t height, const ppc_context_t& ctx) {
   // All of these parameters are REQUIRED.
   assert(buffer_ptr);
   assert(fetch_ptr);
@@ -514,6 +518,51 @@ void VdSwap_entry(
   assert_true(color_space == 0);  // RGB(0)
   assert_true(*width == 1 + gpu_fetch.size_2d.width);
   assert_true(*height == 1 + gpu_fetch.size_2d.height);
+
+  static std::atomic<uint64_t> swap_count{0};
+  const uint64_t swap_sequence = ++swap_count;
+  if (swap_sequence <= 8 || swap_sequence % 60 == 0) {
+    XELOGI("VdSwap present: sequence={} framebuffer={:08X} physical={:08X} "
+           "size={}x{} format={} caller={:08X}",
+           swap_sequence, frontbuffer_virtual_address,
+           frontbuffer_physical_address, uint32_t(*width), uint32_t(*height),
+           uint32_t(texture_format), uint32_t(ctx->lr));
+    const uint32_t render_object = uint32_t(ctx->r[31]);
+    const auto* render_object_host = kernel_memory()->TranslateVirtual<
+        const uint8_t*>(render_object);
+    if (render_object_host) {
+      const auto read_field = [render_object_host](uint32_t offset) {
+        return xe::load_and_swap<uint32_t>(render_object_host + offset);
+      };
+      XELOGI(
+          "VdSwap render state: sequence={} object={:08X} "
+          "2B10={:08X} 3BF0={:08X} 42DC={:08X} 5614={:08X} "
+          "5CD0={:08X} 5F44={:08X} 5F48={:08X}",
+          swap_sequence, render_object, read_field(0x2B10),
+          read_field(0x3BF0), read_field(0x42DC), read_field(0x5614),
+          read_field(0x5CD0), read_field(0x5F44), read_field(0x5F48));
+    }
+    if (swap_sequence == 300) {
+      constexpr uint32_t kCallerWordsBefore = 24;
+      constexpr uint32_t kCallerWordsAfter = 40;
+      const uint32_t caller_block_address =
+          uint32_t(ctx->lr) - kCallerWordsBefore * sizeof(uint32_t);
+      const auto* caller_code = kernel_memory()->TranslateVirtual<
+          const xe::be<uint32_t>*>(caller_block_address);
+      if (caller_code) {
+        std::string caller_dump;
+        for (uint32_t i = 0; i < kCallerWordsBefore + kCallerWordsAfter; ++i) {
+          caller_dump += fmt::format("{:08X}{}", uint32_t(caller_code[i]),
+                                     (i + 1) % 8 == 0 ? "\n" : " ");
+        }
+        XELOGI("VdSwap caller block {:08X}..{:08X} lr={:08X}:\n{}",
+               caller_block_address,
+               caller_block_address +
+                   (kCallerWordsBefore + kCallerWordsAfter) * sizeof(uint32_t),
+               uint32_t(ctx->lr), caller_dump);
+      }
+    }
+  }
 
   // The caller seems to reserve 64 words (256b) in the primary ringbuffer
   // for this method to do what it needs. We just zero them out and send a

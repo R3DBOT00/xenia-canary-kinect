@@ -1,0 +1,281 @@
+[
+  {
+    "path": "third_party/DirectX-Headers",
+    "commit": "33374754f65baac0500dda6187e371136357246f",
+    "url": "https://github.com/microsoft/DirectX-Headers.git",
+    "license_files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "path": "third_party/DirectXShaderCompiler",
+    "commit": "69e54e29086b7035acffb304cec57a350225f8b0",
+    "url": "https://github.com/microsoft/DirectXShaderCompiler.git",
+    "license_files": [
+      "LICENSE.TXT"
+    ]
+  },
+  {
+    "path": "third_party/FFmpeg",
+    "commit": "d980192e175e6ff95bcd287af77e16fcb6597974",
+    "url": "https://github.com/has207/FFmpeg.git",
+    "license_files": [
+      "COPYING.GPLv2",
+      "COPYING.GPLv3",
+      "COPYING.LGPLv2.1",
+      "COPYING.LGPLv3",
+      "LICENSE.md"
+    ]
+  },
+  {
+    "path": "third_party/FidelityFX-CAS",
+    "commit": "9fabcc9a2c45f958aff55ddfda337e74ef894b7f",
+    "url": "https://github.com/GPUOpen-Effects/FidelityFX-CAS.git",
+    "license_files": [
+      "LICENSE.txt"
+    ]
+  },
+  {
+    "path": "third_party/FidelityFX-FSR",
+    "commit": "a21ffb8f6c13233ba336352bdff293894c706575",
+    "url": "https://github.com/GPUOpen-Effects/FidelityFX-FSR.git",
+    "license_files": [
+      "license.txt"
+    ]
+  },
+  {
+    "path": "third_party/SDL2",
+    "commit": "e11183ea6caa3ae4895f4bc54cad2bbb0e365417",
+    "url": "https://github.com/libsdl-org/SDL.git",
+    "license_files": [
+      "LICENSE.txt"
+    ]
+  },
+  {
+    "path": "third_party/SPIRV-Tools",
+    "commit": "33e02568181e3312f49a3cf33df470bf96ef293a",
+    "url": "https://github.com/KhronosGroup/SPIRV-Tools.git",
+    "license_files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "path": "third_party/Vulkan-Headers",
+    "commit": "2cd90f9d20df57eac214c148f3aed885372ddcfe",
+    "url": "https://github.com/KhronosGroup/Vulkan-Headers.git",
+    "license_files": [
+      "LICENSE.md"
+    ]
+  },
+  {
+    "path": "third_party/VulkanMemoryAllocator",
+    "commit": "1d8f600fd424278486eade7ed3e877c99f0846b1",
+    "url": "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git",
+    "license_files": [
+      "LICENSE.txt"
+    ]
+  },
+  {
+    "path": "third_party/aes_128",
+    "commit": "7e3ac3bb6b478187472b4ac6f1698eb203e8e90b",
+    "url": "https://github.com/openluopworld/aes_128.git",
+    "license_files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "path": "third_party/capstone",
+    "commit": "66b08439abd988e87b4542389b4937ce13bd0063",
+    "url": "https://github.com/capstone-engine/capstone.git",
+    "license_files": []
+  },
+  {
+    "path": "third_party/catch",
+    "commit": "ee1450f268dfd5c13aa8670ba97e93cabaf2e15d",
+    "url": "https://github.com/catchorg/Catch2.git",
+    "license_files": [
+      "LICENSE.txt"
+    ]
+  },
+  {
+    "path": "third_party/cpplint",
+    "commit": "350702a4d39395571bd118c9a3cff0a573488d61",
+    "url": "https://github.com/cpplint/cpplint.git",
+    "license_files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "path": "third_party/cxxopts",
+    "commit": "f029892dab60526184ee42ae63a7f6d19a6b0e49",
+    "url": "https://github.com/jarro2783/cxxopts.git",
+    "license_files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "path": "third_party/date",
+    "commit": "f94b8f36c6180be0021876c4a397a054fe50c6f2",
+    "url": "https://github.com/HowardHinnant/date.git",
+    "license_files": [
+      "LICENSE.txt"
+    ]
+  },
+  {
+    "path": "third_party/discord-rpc",
+    "commit": "963aa9f3e5ce81a4682c6ca3d136cddda614db33",
+    "url": "https://github.com/discordapp/discord-rpc.git",
+    "license_files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "path": "third_party/disruptorplus",
+    "commit": "bf9c70c0cc92b6435f7edec75e12751ea37e5c2f",
+    "url": "https://github.com/xenia-canary/disruptorplus.git",
+    "license_files": [
+      "LICENSE.txt"
+    ]
+  },
+  {
+    "path": "third_party/fmt",
+    "commit": "407c905e45ad75fc29bf0f9bb7c5c2fd3475976f",
+    "url": "https://github.com/fmtlib/fmt.git",
+    "license_files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "path": "third_party/glslang",
+    "commit": "a57276bf558f5cf94d3a9854ebdf5a2236849a5a",
+    "url": "https://github.com/KhronosGroup/glslang.git",
+    "license_files": [
+      "license-checker.cfg",
+      "LICENSE.txt"
+    ]
+  },
+  {
+    "path": "third_party/imgui",
+    "commit": "4806a1924ff6181180bf5e4b8b79ab4394118875",
+    "url": "https://github.com/ocornut/imgui.git",
+    "license_files": [
+      "LICENSE.txt"
+    ]
+  },
+  {
+    "path": "third_party/libusb",
+    "commit": "a61afe5f75d969c4561a1d0ad753aa23cee6329a",
+    "url": "https://github.com/libusb/libusb.git",
+    "license_files": [
+      "COPYING"
+    ]
+  },
+  {
+    "path": "third_party/pugixml",
+    "commit": "b2b466403084667c90a0f0cc4e960405cfc8117a",
+    "url": "https://github.com/zeux/pugixml.git",
+    "license_files": [
+      "LICENSE.md"
+    ]
+  },
+  {
+    "path": "third_party/rapidcsv",
+    "commit": "a98b85e663114b8fdc9c0dc03abf22c296f38241",
+    "url": "https://github.com/d99kris/rapidcsv.git",
+    "license_files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "path": "third_party/rapidjson",
+    "commit": "7c73dd7de7c4f14379b781418c6e947ad464c818",
+    "url": "https://github.com/Tencent/rapidjson.git",
+    "license_files": [
+      "license.txt"
+    ]
+  },
+  {
+    "path": "third_party/snappy",
+    "commit": "6af9287fbdb913f0794d0148c6aa43b58e63c8e3",
+    "url": "https://github.com/google/snappy.git",
+    "license_files": [
+      "COPYING"
+    ]
+  },
+  {
+    "path": "third_party/tabulate",
+    "commit": "3a58301067bbc03da89ae5a51b3e05b7da719d38",
+    "url": "https://github.com/p-ranav/tabulate.git",
+    "license_files": [
+      "LICENSE",
+      "LICENSE.optional-lite",
+      "LICENSE.termcolor",
+      "LICENSE.variant-lite"
+    ]
+  },
+  {
+    "path": "third_party/tomlplusplus",
+    "commit": "708fff700f36ab3c2ab107b984ec9f3b8be5f055",
+    "url": "https://github.com/marzer/tomlplusplus.git",
+    "license_files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "path": "third_party/utfcpp",
+    "commit": "65701fe00700577f9f4e9b96d682bd7cfcc0b76e",
+    "url": "https://github.com/nemtrif/utfcpp.git",
+    "license_files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "path": "third_party/xbyak",
+    "commit": "4e44f4614ddbf038f2a6296f5b906d5c72691e0f",
+    "url": "https://github.com/herumi/xbyak.git",
+    "license_files": [
+      "COPYRIGHT"
+    ]
+  },
+  {
+    "path": "third_party/xbyak_aarch64",
+    "commit": "59c6a7e7368cd2dbb07c46abe83239ace4d58849",
+    "url": "https://github.com/fujitsu/xbyak_aarch64.git",
+    "license_files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "path": "third_party/xxhash",
+    "commit": "e626a72bc2321cd320e953a0ccf1584cad60f363",
+    "url": "https://github.com/Cyan4973/xxHash.git",
+    "license_files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "path": "third_party/zarchive",
+    "commit": "b467f7aa342895e66a1a003377ed63b3c1be3de3",
+    "url": "https://github.com/exzap/ZArchive.git",
+    "license_files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "path": "third_party/zlib-ng",
+    "commit": "860e4cff7917d93f54f5d7f0bc1d0e8b1a3cb988",
+    "url": "https://github.com/zlib-ng/zlib-ng.git",
+    "license_files": [
+      "LICENSE.md"
+    ]
+  },
+  {
+    "path": "third_party/zstd",
+    "commit": "20707e3718ee14250fb8a44b3bf023ea36bd88df",
+    "url": "https://github.com/facebook/zstd.git",
+    "license_files": [
+      "COPYING",
+      "LICENSE"
+    ]
+  }
+]

@@ -7,6 +7,8 @@
  ******************************************************************************
  */
 
+#include <functional>
+
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/string_util.h"
@@ -23,6 +25,8 @@
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
 #include "xenia/vfs/devices/stfs_xbox.h"
+#include "xenia/vfs/devices/xcontent_container_device.h"
+#include "xenia/vfs/virtual_file_system.h"
 #include "xenia/xbox.h"
 
 DEFINE_int32(
@@ -463,10 +467,86 @@ dword_result_t XamContentOpenFile_entry(
     dword_t user_index, lpstring_t root_name, lpstring_t path, dword_t flags,
     lpdword_t disposition_ptr, lpdword_t license_mask_ptr,
     pointer_t<XAM_OVERLAPPED> overlapped_ptr) {
-  // TODO(gibbed): arguments assumed based on XamContentCreate.
-  return X_ERROR_FILE_NOT_FOUND;
+  if (!root_name || !path) {
+    return X_ERROR_INVALID_PARAMETER;
+  }
+
+  auto* file_system = kernel_state()->file_system();
+  auto* source_entry = file_system->ResolvePath(path.value());
+  if (!source_entry ||
+      (source_entry->attributes() & vfs::kFileAttributeDirectory)) {
+    return X_ERROR_FILE_NOT_FOUND;
+  }
+
+  const std::string source_path = path.value();
+  const size_t source_hash = std::hash<std::string>{}(source_path);
+  const auto extraction_root =
+      kernel_state()->emulator()->cache_root() / "content_file_mounts" /
+      fmt::format("{:08X}", kernel_state()->title_id()) /
+      fmt::format("{:016X}", source_hash);
+  const auto extracted_path = extraction_root / xe::to_path(source_entry->name());
+
+  std::error_code error_code;
+  std::filesystem::create_directories(extraction_root, error_code);
+  if (error_code) {
+    XELOGE("XamContentOpenFile: unable to create extraction directory {}: {}",
+           xe::path_to_utf8(extraction_root), error_code.message());
+    return X_ERROR_FUNCTION_FAILED;
+  }
+
+  bool extract_source = !std::filesystem::exists(extracted_path);
+  if (!extract_source) {
+    const uintmax_t extracted_size =
+        std::filesystem::file_size(extracted_path, error_code);
+    extract_source = error_code || extracted_size != source_entry->size();
+  }
+  if (extract_source) {
+    uint64_t progress = 0;
+    const X_STATUS extract_result = vfs::VirtualFileSystem::ExtractContentFile(
+        source_entry, extraction_root, progress, true);
+    if (extract_result != X_STATUS_SUCCESS) {
+      XELOGE("XamContentOpenFile: extraction failed for {} with {:08X}",
+             source_path, extract_result);
+      return X_ERROR_FUNCTION_FAILED;
+    }
+  }
+
+  const std::string mount_path =
+      fmt::format("\\Device\\ContentFile\\{}", root_name.value());
+  auto device = vfs::XContentContainerDevice::CreateContentDevice(
+      mount_path, extracted_path);
+  if (!device || !device->Initialize()) {
+    XELOGE("XamContentOpenFile: {} is not a valid content container",
+           source_path);
+    return X_ERROR_FUNCTION_FAILED;
+  }
+  const uint32_t license_mask = device->license_mask();
+
+  file_system->UnregisterSymbolicLink(root_name.value() + ":");
+  file_system->UnregisterDevice(mount_path);
+  if (!file_system->RegisterDevice(std::move(device)) ||
+      !file_system->RegisterSymbolicLink(root_name.value() + ":", mount_path)) {
+    file_system->UnregisterDevice(mount_path);
+    return X_ERROR_FUNCTION_FAILED;
+  }
+
+  if (disposition_ptr) {
+    *disposition_ptr = 1;
+  }
+  if (license_mask_ptr) {
+    *license_mask_ptr = license_mask;
+  }
+
+  XELOGI("XamContentOpenFile: mounted {} as {}:", source_path,
+         root_name.value());
+  if (overlapped_ptr) {
+    kernel_state()->CompleteOverlappedImmediate(overlapped_ptr,
+                                                X_ERROR_SUCCESS);
+    return X_ERROR_IO_PENDING;
+  }
+  return X_ERROR_SUCCESS;
 }
-DECLARE_XAM_EXPORT1(XamContentOpenFile, kContent, kStub);
+DECLARE_XAM_EXPORT1(XamContentOpenFile, kContent, kImplemented);
 
 dword_result_t XamContentFlush_entry(lpstring_t root_name,
                                      pointer_t<XAM_OVERLAPPED> overlapped_ptr) {

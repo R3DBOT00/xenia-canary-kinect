@@ -20,6 +20,11 @@ namespace xboxkrnl {
 
 xe::cpu::Export* RegisterExport_xboxkrnl(xe::cpu::Export* export_entry);
 
+// Shared retail PsCam dispatcher used by the exported kernel entry point and
+// the XStudio NUI forwarding path.
+uint32_t PsCamDeviceRequestDispatch(uint32_t guest_request,
+                                    uint32_t caller_address);
+
 // Registration functions, one per file.
 #define XE_MODULE_EXPORT_GROUP(m, n)                                  \
   void Register##n##Exports(xe::cpu::ExportResolver* export_resolver, \

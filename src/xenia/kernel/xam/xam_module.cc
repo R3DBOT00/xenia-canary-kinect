@@ -26,6 +26,8 @@ XamModule::XamModule(Emulator* emulator, KernelState* kernel_state)
   Register##n##Exports(export_resolver_, kernel_state_);
 #include "xam_module_export_groups.inc"
 #undef XE_MODULE_EXPORT_GROUP
+
+  StartWindowsNuiBackend();
 }
 
 static auto& get_xam_exports() {

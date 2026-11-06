@@ -10,3 +10,6 @@
 
 src/**/shaders/bytecode/** linguist-generated=true
 src/**/testing/** linguist-detectable=false
+
+# Unified-diff files contain intentional whitespace on context lines.
+patches/*.patch -whitespace
