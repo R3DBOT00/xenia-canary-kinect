@@ -1,4 +1,4 @@
-# Xenia — 360io fork
+# Xenia — Kinect fork
 
 An experimental fork of Xenia Canary developed alongside the 360io project.
 It explores Kinect integration, guest kernel compatibility, graphics behavior,
